@@ -20,6 +20,7 @@ self.MonacoEnvironment = {
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.BASE_URL).replace(/\/$/, '');
 const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'Koding LAB SMKN 1 Temon';
+const PYODIDE_PACKAGE_BASE_URL = new URL('./pyodide/packages/', document.baseURI).href;
 
 const PYODIDE_INDEX_URL = import.meta.env.DEV
   ? '/node_modules/pyodide/'
@@ -36,6 +37,13 @@ async function apiFetch(endpoint, options = {}) {
 
 let currentUser = null;
 let pyodideInstance = null;
+let pythonWorker = null;
+let pythonWorkerReady = false;
+let pythonInputBuffer = null;
+let pythonInputState = null;
+let activePythonRun = null;
+let activePythonInput = null;
+let pythonRunSequence = 0;
 let pythonOutputPaneId = 'consolePane';
 let editor = null;
 let inspectorEditor = null;
@@ -61,6 +69,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyTheme(currentTheme);
   refreshIcons();
   setupAccountManagement();
+  setupPythonInput();
 
   // 1. Inisialisasi Monaco Editor lebih dulu agar elemen siap
   initMonacoEditor();
@@ -715,11 +724,17 @@ window.deleteFile = async function(fileName) {
 };
 
 async function initPyodide() {
-  const statusElem = document.getElementById('pyodideStatus');
   setPythonRuntimeStatus('loading');
   try {
+    if (self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined') {
+      await initPythonWorker();
+      setPythonRuntimeStatus('ready', 'Python berjalan di worker; input tersedia di panel Console.');
+      return;
+    }
+
     pyodideInstance = await loadPyodide({
-      indexURL: PYODIDE_INDEX_URL
+      indexURL: PYODIDE_INDEX_URL,
+      packageBaseUrl: PYODIDE_PACKAGE_BASE_URL
     });
     
     pyodideInstance.setStdout({ batched: (msg) => appendConsole(msg, pythonOutputPaneId) });
@@ -735,11 +750,227 @@ def custom_input(p=""):
 builtins.input = custom_input
     `);
 
-    setPythonRuntimeStatus('ready');
+    setPythonRuntimeStatus('ready', 'Input memakai dialog bawaan browser. Aktifkan header COOP/COEP untuk input Console.');
   } catch (err) {
     console.error("Error Pyodide:", err);
     setPythonRuntimeStatus('error', err.message || 'Runtime Python gagal dimuat.');
   }
+}
+
+function initPythonWorker() {
+  pythonInputBuffer = new SharedArrayBuffer(8 + 65536);
+  pythonInputState = new Int32Array(pythonInputBuffer, 0, 2);
+  pythonWorker = new Worker(new URL('./python.worker.js', import.meta.url), { type: 'module' });
+  pythonWorker.addEventListener('message', handlePythonWorkerMessage);
+  pythonWorker.addEventListener('error', handlePythonWorkerError);
+
+  return new Promise((resolve, reject) => {
+    const handleInitialization = ({ data }) => {
+      if (data.type === 'ready') {
+        pythonWorkerReady = true;
+        pythonWorker.removeEventListener('message', handleInitialization);
+        pythonWorker.removeEventListener('error', handleInitializationError);
+        resolve();
+      } else if (data.type === 'initialization-error') {
+        pythonWorker.removeEventListener('message', handleInitialization);
+        pythonWorker.removeEventListener('error', handleInitializationError);
+        reject(new Error(data.message || 'Runtime Python gagal dimuat.'));
+      }
+    };
+
+    const handleInitializationError = (event) => {
+      pythonWorker.removeEventListener('message', handleInitialization);
+      reject(new Error(event.message || 'Worker Python gagal dijalankan.'));
+    };
+
+    pythonWorker.addEventListener('message', handleInitialization);
+    pythonWorker.addEventListener('error', handleInitializationError);
+    pythonWorker.postMessage({
+      type: 'initialize',
+      indexURL: new URL(PYODIDE_INDEX_URL, document.baseURI).href,
+      packageBaseUrl: PYODIDE_PACKAGE_BASE_URL,
+      inputBuffer: pythonInputBuffer
+    });
+  });
+}
+
+function handlePythonWorkerError(event) {
+  const message = event.message || 'Worker Python gagal dijalankan.';
+  pythonWorkerReady = false;
+  setPythonRuntimeStatus('error', message);
+  if (activePythonRun) {
+    const { outputPaneId, reject } = activePythonRun;
+    hidePythonInput(outputPaneId);
+    activePythonRun = null;
+    reject(new Error(message));
+  }
+}
+
+function handlePythonWorkerMessage({ data }) {
+  if (data.type === 'stdout' || data.type === 'stderr') {
+    appendConsole(data.type === 'stderr' ? `[Error] ${data.text}` : data.text, pythonOutputPaneId);
+    return;
+  }
+
+  if (data.type === 'input-request') {
+    if (!activePythonRun || data.runId !== activePythonRun.id) return;
+    showPythonInput(data.prompt, activePythonRun.outputPaneId);
+    if (activePythonRun.outputPaneId === 'inspectorConsolePane') {
+      setInspectorRunStatus('Program menunggu input Anda...');
+    }
+    return;
+  }
+
+  if (data.type === 'loading-packages' && activePythonRun?.id === data.runId) {
+    appendConsole('[Memuat paket Python yang diperlukan...]', activePythonRun.outputPaneId);
+    return;
+  }
+
+  if (data.type === 'run-finished' && activePythonRun?.id === data.runId) {
+    hidePythonInput(activePythonRun.outputPaneId);
+    const { resolve, reject } = activePythonRun;
+    activePythonRun = null;
+    if (data.error) reject(new Error(data.error));
+    else resolve(Array.isArray(data.figures) ? data.figures : []);
+  }
+}
+
+function setupPythonInput() {
+  document.getElementById('pythonInputForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitPythonInput('consolePane');
+  });
+  document.getElementById('inspectorPythonInputForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    submitPythonInput('inspectorConsolePane');
+  });
+  document.getElementById('cancelPythonInput').addEventListener('click', () => cancelPythonInput('consolePane'));
+  document.getElementById('cancelInspectorPythonInput').addEventListener('click', () => cancelPythonInput('inspectorConsolePane'));
+}
+
+function showPythonInput(prompt, paneId) {
+  activePythonInput = { prompt: String(prompt || ''), paneId };
+  const isInspector = paneId === 'inspectorConsolePane';
+  const form = document.getElementById(isInspector ? 'inspectorPythonInputForm' : 'pythonInputForm');
+  const label = document.getElementById(isInspector ? 'inspectorPythonInputPrompt' : 'pythonInputPrompt');
+  const input = document.getElementById(isInspector ? 'inspectorPythonInputValue' : 'pythonInputValue');
+  label.textContent = activePythonInput.prompt || 'Input:';
+  input.value = '';
+  form.classList.remove('hidden');
+  form.classList.add('flex');
+  requestAnimationFrame(() => input.focus());
+}
+
+function hidePythonInput(paneId) {
+  const isInspector = paneId === 'inspectorConsolePane';
+  const form = document.getElementById(isInspector ? 'inspectorPythonInputForm' : 'pythonInputForm');
+  const input = document.getElementById(isInspector ? 'inspectorPythonInputValue' : 'pythonInputValue');
+  form.classList.add('hidden');
+  form.classList.remove('flex');
+  input.value = '';
+  if (activePythonInput?.paneId === paneId) activePythonInput = null;
+}
+
+function submitPythonInput(paneId) {
+  if (!activePythonInput || activePythonInput.paneId !== paneId || !pythonInputState) return;
+
+  const isInspector = paneId === 'inspectorConsolePane';
+  const input = document.getElementById(isInspector ? 'inspectorPythonInputValue' : 'pythonInputValue');
+  const value = input.value;
+  const encoded = new TextEncoder().encode(value);
+  const capacity = pythonInputBuffer.byteLength - 8;
+  if (encoded.length > capacity) {
+    input.setCustomValidity('Input terlalu panjang.');
+    input.reportValidity();
+    input.setCustomValidity('');
+    return;
+  }
+
+  new Uint8Array(pythonInputBuffer, 8, encoded.length).set(encoded);
+  Atomics.store(pythonInputState, 1, encoded.length);
+  Atomics.store(pythonInputState, 0, 1);
+  Atomics.notify(pythonInputState, 0);
+  appendConsole(`${activePythonInput.prompt}${value}`, paneId);
+  if (paneId === 'inspectorConsolePane') setInspectorRunStatus('Input dikirim; kode sedang dijalankan...');
+  hidePythonInput(paneId);
+}
+
+function cancelPythonInput(paneId) {
+  if (!activePythonInput || activePythonInput.paneId !== paneId || !pythonInputState) return;
+  Atomics.store(pythonInputState, 1, 0);
+  Atomics.store(pythonInputState, 0, 2);
+  Atomics.notify(pythonInputState, 0);
+  hidePythonInput(paneId);
+}
+
+function runPythonCode(code, paneId) {
+  pythonOutputPaneId = paneId;
+  if (pyodideInstance) return runPythonCodeOnMainThread(code);
+  if (!pythonWorkerReady || !pythonWorker) {
+    throw new Error('Runtime Python belum siap. Tunggu hingga status Python Ready.');
+  }
+  if (activePythonRun) {
+    throw new Error('Program Python lain masih berjalan. Tunggu hingga selesai.');
+  }
+
+  const runId = ++pythonRunSequence;
+  return new Promise((resolve, reject) => {
+    activePythonRun = { id: runId, outputPaneId: paneId, resolve, reject };
+    pythonWorker.postMessage({ type: 'run', runId, code });
+  });
+}
+
+async function runPythonCodeOnMainThread(code) {
+  appendConsole('[Memuat paket Python yang diperlukan...]', pythonOutputPaneId);
+  await pyodideInstance.loadPackagesFromImports(code);
+  if (code.includes('matplotlib')) {
+    await pyodideInstance.runPythonAsync("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; plt.show = lambda *args, **kwargs: None");
+  }
+  await pyodideInstance.runPythonAsync(code);
+  const figures = await pyodideInstance.runPythonAsync(`
+import base64
+import io
+import sys
+
+def _export_matplotlib_figures():
+    if "matplotlib.pyplot" not in sys.modules:
+        return []
+    import matplotlib.pyplot as plt
+    figures = []
+    for _figure_number in plt.get_fignums():
+        _buffer = io.BytesIO()
+        plt.figure(_figure_number).savefig(_buffer, format="png", bbox_inches="tight")
+        figures.append(base64.b64encode(_buffer.getvalue()).decode("ascii"))
+        plt.close(_figure_number)
+    return figures
+
+_export_matplotlib_figures()
+  `);
+  const figureData = figures.toJs();
+  figures.destroy();
+  return figureData;
+}
+
+function renderPythonFigures(figures, paneId) {
+  if (!figures.length) return;
+  const output = document.getElementById(paneId === 'inspectorConsolePane' ? 'inspectorPythonFigures' : 'pythonFigures');
+  output.replaceChildren();
+  figures.forEach((base64, index) => {
+    const figure = document.createElement('figure');
+    figure.className = 'my-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700';
+    const image = document.createElement('img');
+    image.src = `data:image/png;base64,${base64}`;
+    image.alt = `Grafik Python ${index + 1}`;
+    image.className = 'mx-auto h-auto max-w-full';
+    figure.appendChild(image);
+    output.appendChild(figure);
+  });
+}
+
+function setPythonConsoleOutput(paneId, text) {
+  const isInspector = paneId === 'inspectorConsolePane';
+  document.getElementById(isInspector ? 'inspectorConsoleText' : 'consoleText').textContent = text;
+  document.getElementById(isInspector ? 'inspectorPythonFigures' : 'pythonFigures').replaceChildren();
 }
 
 function setPythonRuntimeStatus(state, detail = '') {
@@ -782,12 +1013,13 @@ window.executeCode = async function() {
 
   if (lang === 'python') {
     window.switchOutputTab('console');
-    if (!pyodideInstance) return alert("Python masih disiapkan. Silakan coba kembali setelah status Python Ready.");
-    document.getElementById('consolePane').textContent = "--- Eksekusi Python ---\n";
+    if (!pyodideInstance && !pythonWorkerReady) return alert("Python masih disiapkan. Silakan coba kembali setelah status Python Ready.");
+    setPythonConsoleOutput('consolePane', "--- Eksekusi Python ---\n");
     setButtonLoading(button, true, 'Menjalankan...');
     try {
-      await pyodideInstance.runPythonAsync(code);
+      const figures = await runPythonCode(code, 'consolePane');
       appendConsole("\n--- Selesai ---");
+      renderPythonFigures(figures, 'consolePane');
     } catch (err) {
       appendConsole(`\n[Execution Error]: ${err.message}`);
     } finally {
@@ -803,7 +1035,7 @@ window.executeCode = async function() {
     iframe.srcdoc = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:system-ui,sans-serif;padding:2rem;color:#334155} .preview-sample{padding:1rem;border:1px solid #cbd5e1;border-radius:.75rem} ${code}</style></head><body><h2>Preview CSS</h2><div class="preview-sample"><h3>Contoh elemen</h3><p>Gunakan selector seperti <code>body</code>, <code>h3</code>, atau <code>.preview-sample</code>.</p><button>Contoh tombol</button></div></body></html>`;
   } else if (lang === 'javascript') {
     window.switchOutputTab('console');
-    document.getElementById('consolePane').textContent = "--- Eksekusi JavaScript ---\n";
+    setPythonConsoleOutput('consolePane', "--- Eksekusi JavaScript ---\n");
     setButtonLoading(button, true, 'Menjalankan...');
     const oldLog = console.log;
     try {
@@ -827,12 +1059,13 @@ window.executeCode = async function() {
 function appendConsole(text, paneId = 'consolePane') {
   const consolePane = document.getElementById(paneId);
   if (!consolePane) return;
-  consolePane.textContent += text + "\n";
+  const output = document.getElementById(paneId === 'inspectorConsolePane' ? 'inspectorConsoleText' : 'consoleText');
+  output.textContent += text + "\n";
   consolePane.scrollTop = consolePane.scrollHeight;
 }
 
 window.clearConsole = function() {
-  document.getElementById('consolePane').textContent = "Console dibersihkan.\n";
+  setPythonConsoleOutput('consolePane', "Console dibersihkan.\n");
   document.getElementById('htmlPreviewIframe').srcdoc = "";
 };
 
@@ -1044,7 +1277,7 @@ window.inspectStudentFile = async function(studentName, nipd, fileName) {
   document.getElementById('inspectorModal').classList.remove('hidden');
   inspectorFileName = fileName;
   setInspectorRunStatus('Memuat kode siswa...');
-  document.getElementById('inspectorConsolePane').textContent = 'Hasil pengujian kode siswa akan tampil di sini.';
+  setPythonConsoleOutput('inspectorConsolePane', 'Hasil pengujian kode siswa akan tampil di sini.');
   switchInspectorOutputTab('console');
 
   let code;
@@ -1139,19 +1372,20 @@ window.runInspectorCode = async function() {
   }
 
   if (language === 'python') {
-    if (!pyodideInstance) {
+    if (!pyodideInstance && !pythonWorkerReady) {
       setInspectorRunStatus('Runtime Python belum siap. Tunggu hingga status Python Ready.', true);
       window.switchInspectorOutputTab('console');
       return;
     }
     window.switchInspectorOutputTab('console');
-    consolePane.textContent = '--- Uji kode Python siswa ---\n';
+    setPythonConsoleOutput('inspectorConsolePane', '--- Uji kode Python siswa ---\n');
     setButtonLoading(button, true, 'Menjalankan...');
     pythonOutputPaneId = 'inspectorConsolePane';
     setInspectorRunStatus('Kode Python sedang dijalankan...');
     try {
-      await pyodideInstance.runPythonAsync(code);
+      const figures = await runPythonCode(code, 'inspectorConsolePane');
       appendConsole('--- Selesai ---', 'inspectorConsolePane');
+      renderPythonFigures(figures, 'inspectorConsolePane');
       setInspectorRunStatus('Pengujian Python selesai. File siswa tidak diubah.');
     } catch (error) {
       appendConsole(`[Execution Error]: ${error.message}`, 'inspectorConsolePane');
@@ -1165,7 +1399,7 @@ window.runInspectorCode = async function() {
 
   if (language === 'javascript') {
     window.switchInspectorOutputTab('console');
-    consolePane.textContent = '--- Uji JavaScript siswa ---\n';
+    setPythonConsoleOutput('inspectorConsolePane', '--- Uji JavaScript siswa ---\n');
     setButtonLoading(button, true, 'Menjalankan...');
     setInspectorRunStatus('Kode JavaScript berjalan di sandbox...');
     const token = crypto.randomUUID();
@@ -1212,6 +1446,7 @@ window.runInspectorCode = async function() {
 };
 
 window.closeInspector = function() {
+  cancelPythonInput('inspectorConsolePane');
   inspectorExecutionCleanup?.();
   document.getElementById('inspectorModal').classList.add('hidden');
   document.getElementById('inspectorPreviewFrame').srcdoc = '';

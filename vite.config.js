@@ -36,12 +36,22 @@ export default defineConfig({
     })
   ],
   server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
+    },
     proxy: {
       '/api.php': {
         target: 'http://localhost/koding-python',
         changeOrigin: true,
         secure: false
       }
+    }
+  },
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
     }
   },
   build: {

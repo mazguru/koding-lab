@@ -8,6 +8,8 @@ AddType application/wasm .wasm
 </FilesMatch>
 
 <IfModule mod_headers.c>
+  Header always set Cross-Origin-Opener-Policy "same-origin"
+  Header always set Cross-Origin-Embedder-Policy "require-corp"
   <FilesMatch "\.mjs$">
     Header set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>

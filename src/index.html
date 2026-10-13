@@ -195,7 +195,16 @@
           <button onclick="clearConsole()" title="Bersihkan output" class="shrink-0 text-[10px] sm:text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">Bersihkan</button>
         </div>
 
-        <div id="consolePane" class="flex-1 p-3 font-mono text-xs text-emerald-600 dark:text-emerald-400 overflow-y-auto whitespace-pre-wrap select-text">Siap menjalankan program...</div>
+        <div id="consolePane" class="min-h-0 flex-1 p-3 font-mono text-xs text-emerald-600 dark:text-emerald-400 overflow-y-auto select-text">
+          <pre id="consoleText" class="whitespace-pre-wrap">Siap menjalankan program...</pre>
+          <div id="pythonFigures" class="space-y-3"></div>
+        </div>
+        <form id="pythonInputForm" class="hidden shrink-0 gap-2 border-t border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+          <label id="pythonInputPrompt" for="pythonInputValue" class="max-w-[45%] truncate font-mono text-xs text-blue-700 dark:text-blue-300" aria-live="polite">Input:</label>
+          <input id="pythonInputValue" type="text" maxlength="16000" autocomplete="off" placeholder="Ketik input untuk program..." class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+          <button type="submit" class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">Kirim</button>
+          <button id="cancelPythonInput" type="button" class="rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Batal</button>
+        </form>
         <div id="previewPane" class="flex-1 w-full h-full hidden bg-white">
           <iframe id="htmlPreviewIframe" class="w-full h-full border-0" sandbox="allow-scripts"></iframe>
         </div>
@@ -357,7 +366,16 @@
           <button id="inspectorConsoleTab" type="button" onclick="switchInspectorOutputTab('console')" class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white">Console</button>
           <button id="inspectorPreviewTab" type="button" onclick="switchInspectorOutputTab('preview')" class="rounded-md px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-800">Preview</button>
         </div>
-        <pre id="inspectorConsolePane" class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs leading-relaxed text-emerald-700 dark:text-emerald-300">Hasil pengujian kode siswa akan tampil di sini.</pre>
+        <div id="inspectorConsolePane" class="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-relaxed text-emerald-700 dark:text-emerald-300">
+          <pre id="inspectorConsoleText" class="whitespace-pre-wrap">Hasil pengujian kode siswa akan tampil di sini.</pre>
+          <div id="inspectorPythonFigures" class="space-y-3"></div>
+        </div>
+        <form id="inspectorPythonInputForm" class="hidden shrink-0 gap-2 border-t border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-950">
+          <label id="inspectorPythonInputPrompt" for="inspectorPythonInputValue" class="max-w-[45%] truncate font-mono text-xs text-blue-700 dark:text-blue-300" aria-live="polite">Input:</label>
+          <input id="inspectorPythonInputValue" type="text" maxlength="16000" autocomplete="off" placeholder="Ketik input untuk program siswa..." class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+          <button type="submit" class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">Kirim</button>
+          <button id="cancelInspectorPythonInput" type="button" class="rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Batal</button>
+        </form>
         <iframe id="inspectorPreviewFrame" title="Preview kode siswa" class="hidden min-h-0 flex-1 w-full border-0 bg-white" sandbox="allow-scripts"></iframe>
       </div>
     </div>

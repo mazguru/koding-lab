@@ -4,6 +4,8 @@ Aplikasi belajar coding multi-bahasa berbasis Vite, Monaco Editor, dan Pyodide, 
 Antarmuka menyesuaikan desktop, tablet, dan ponsel; di layar kecil daftar file dan navigasi guru ditampilkan dalam baris yang dapat digeser.
 Lab Guru memakai workspace kode yang sama: Python dan JavaScript dapat dijalankan, HTML dan CSS dapat dipratinjau langsung. Status runtime Python dan pemuatan data siswa ditampilkan di area kerja/dashboard.
 Saat guru mengintip file siswa, kode tampil hanya-baca tetapi dapat diuji dari dialog yang sama. Hasil Python/JavaScript masuk ke Console; HTML/CSS dirender di tab Preview yang disandbox, tanpa menyimpan perubahan ke file siswa.
+Fungsi `input()` Python berjalan melalui kolom input di panel Console pada browser yang mendukung isolasi lintas-origin. Input dapat diminta berulang kali dalam satu program, seperti pada permainan tebak angka. Server Laragon dan Vite development sudah mengirim header isolasi yang diperlukan; pada browser atau hosting yang tidak mengaktifkannya, aplikasi tetap berjalan memakai dialog input bawaan browser.
+Impor NumPy dan Matplotlib beserta dependensinya dimuat otomatis saat pertama dipakai. `npm install` mengunduh wheel dari CDN resmi Pyodide ke cache lokal dan memverifikasi setiap berkas dengan SHA-256 dari lockfile. Sesudah instalasi dan build selesai, impor kedua paket ini dan grafik Matplotlib dapat digunakan offline. Paket Pyodide lain yang tidak termasuk dalam cache ini belum tersedia offline. Grafik ditampilkan di bawah output program; `matplotlib.pyplot` menggunakan backend Agg agar dapat dirender dalam browser.
 
 ## Persyaratan
 
