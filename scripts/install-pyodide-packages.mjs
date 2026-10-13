@@ -7,26 +7,35 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pyodideRoot = resolve(projectRoot, 'node_modules', 'pyodide');
 const packageDirectory = resolve(projectRoot, 'src', 'public', 'pyodide', 'packages');
 const packagesBaseUrl = 'https://cdn.jsdelivr.net/pyodide';
-const requestedPackages = ['numpy', 'matplotlib'];
+const downloadConcurrency = 8;
 
 const lockfile = JSON.parse(await readFile(resolve(pyodideRoot, 'pyodide-lock.json'), 'utf8'));
 const pyodideVersion = JSON.parse(await readFile(resolve(pyodideRoot, 'package.json'), 'utf8')).version;
-const packageNames = new Set();
-
-function addPackageAndDependencies(name) {
-  if (packageNames.has(name)) return;
-  const packageInfo = lockfile.packages[name];
-  if (!packageInfo) throw new Error(`Package "${name}" tidak tersedia di lockfile Pyodide.`);
-  packageNames.add(name);
-  packageInfo.depends.forEach(addPackageAndDependencies);
-}
-
-requestedPackages.forEach(addPackageAndDependencies);
+const packages = Object.values(lockfile.packages).filter((packageInfo) =>
+  packageInfo.package_type === 'package' || packageInfo.package_type === 'shared_library'
+);
 await mkdir(packageDirectory, { recursive: true });
-const previousFiles = (await readdir(packageDirectory)).filter((name) => /^[\w.+-]+\.whl$/.test(name));
+const previousFiles = (await readdir(packageDirectory)).filter((name) => /^[\w.+-]+\.(?:whl|zip)$/.test(name));
 
-const downloadedPackages = await Promise.all([...packageNames].map(async (name) => {
-  const packageInfo = lockfile.packages[name];
+let nextPackageIndex = 0;
+let completedPackages = 0;
+const downloadedPackages = await Promise.all(Array.from(
+  { length: Math.min(downloadConcurrency, packages.length) },
+  async () => {
+    const downloadedByWorker = [];
+    while (nextPackageIndex < packages.length) {
+      const packageInfo = packages[nextPackageIndex++];
+      downloadedByWorker.push(await downloadPackage(packageInfo));
+      completedPackages++;
+      if (completedPackages % 25 === 0 || completedPackages === packages.length) {
+        console.log(`Paket Pyodide tersimpan: ${completedPackages}/${packages.length}`);
+      }
+    }
+    return downloadedByWorker;
+  }
+)).then((results) => results.flat());
+
+async function downloadPackage(packageInfo) {
   const targetPath = resolve(packageDirectory, packageInfo.file_name);
 
   try {
@@ -50,9 +59,8 @@ const downloadedPackages = await Promise.all([...packageNames].map(async (name) 
   }
 
   await writeFile(targetPath, content);
-  console.log(`Paket Pyodide tersimpan: ${name} ${packageInfo.version}`);
   return packageInfo.file_name;
-}));
+}
 
 const currentFiles = new Set(downloadedPackages);
 for (const previousFile of previousFiles) {
@@ -61,4 +69,4 @@ for (const previousFile of previousFiles) {
   }
 }
 
-console.log(`Paket NumPy/Matplotlib dan ${downloadedPackages.length - requestedPackages.length} dependensi siap untuk penggunaan offline.`);
+console.log(`${downloadedPackages.length} paket/komponen Pyodide siap untuk penggunaan offline.`);

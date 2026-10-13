@@ -3,7 +3,7 @@ node_modules/
 /dist/
 /assets/
 /pyodide/
-/src/public/pyodide/packages/*.whl
+/src/public/pyodide/packages/*
 /index.html
 .env*
 !.env.example
