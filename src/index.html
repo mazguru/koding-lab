@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PythonLive Studio - Platform Belajar Multi-Bahasa</title>
+</head>
+<body class="bg-slate-100 text-slate-800 dark:bg-slate-950 dark:text-slate-100 font-sans h-screen flex flex-col overflow-hidden transition-colors duration-200">
+
+  <!-- MODAL LOGIN -->
+  <div id="loginModal" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+      
+      <div class="p-6 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 text-center">
+        <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600/20 text-blue-500 mb-3 border border-blue-500/30">
+          <i data-lucide="code-2" class="w-6 h-6"></i>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white" id="appTitleHeader">PythonLive Studio</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Platform Belajar Coding Multi-Bahasa & Pemantauan Live</p>
+      </div>
+
+      <div class="flex border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-950/50 p-1">
+        <button id="tabSiswaBtn" onclick="switchRoleTab('siswa')" class="flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 bg-blue-600 text-white">
+          <i data-lucide="user" class="w-4 h-4"></i> Siswa
+        </button>
+        <button id="tabGuruBtn" onclick="switchRoleTab('guru')" class="flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white">
+          <i data-lucide="shield-check" class="w-4 h-4"></i> Guru / Pengajar
+        </button>
+      </div>
+
+      <!-- Form Siswa -->
+      <form id="formSiswa" onsubmit="handleLoginSiswa(event)" class="p-6 space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NIPD Siswa</label>
+          <input type="text" id="siswaNipd" required placeholder="Contoh: 2952" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Password Siswa</label>
+          <input type="password" id="siswaPassword" required placeholder="Contoh: 12345678" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-blue-500">
+        </div>
+        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-blue-600/20">
+          <i data-lucide="log-in" class="w-4 h-4"></i> Masuk Ke Workspace
+        </button>
+      </form>
+
+      <!-- Form Guru -->
+      <form id="formGuru" onsubmit="handleLoginGuru(event)" class="p-6 space-y-4 hidden">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Username Guru</label>
+          <input type="text" id="guruUsername" required placeholder="Contoh: guru" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-purple-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Password Guru</label>
+          <input type="password" id="guruPassword" required placeholder="Default: 123" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-purple-500">
+        </div>
+        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-medium py-2.5 rounded-lg transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-purple-600/20">
+          <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Masuk Dashboard Guru
+        </button>
+      </form>
+
+    </div>
+  </div>
+
+  <!-- MODAL UBAH PASSWORD -->
+  <div id="changePasswordModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+        <h3 class="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <i data-lucide="key-round" class="w-4 h-4 text-amber-500"></i> Ubah Password
+        </h3>
+        <button onclick="closeChangePasswordModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+
+      <form onsubmit="handleChangePassword(event)" class="space-y-3">
+        <div>
+          <label class="block text-xs text-slate-600 dark:text-slate-400 mb-1">Password Lama</label>
+          <input type="password" id="oldPasswordInput" required class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-600 dark:text-slate-400 mb-1">Password Baru</label>
+          <input type="password" id="newPasswordInput" required class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500">
+        </div>
+        <button type="submit" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-medium py-2 rounded-lg text-xs transition">
+          Simpan Password Baru
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- NAVBAR -->
+  <header class="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="bg-blue-600/20 p-2 rounded-lg border border-blue-500/30 text-blue-500">
+        <i data-lucide="terminal" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-sm text-slate-900 dark:text-white tracking-wide flex items-center gap-2">
+          <span id="appNavTitle">PythonLive Studio</span>
+          <span id="roleBadge" class="text-[10px] bg-blue-500/20 text-blue-600 dark:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full uppercase font-mono">Siswa</span>
+        </h1>
+        <p class="text-[11px] text-slate-500 dark:text-slate-400" id="userInfoText">Memuat Sesi...</p>
+      </div>
+    </div>
+
+    <div id="teacherNavTabs" class="hidden flex items-center gap-1 bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-300 dark:border-slate-800">
+      <button id="navMonitorBtn" onclick="switchTeacherTab('monitoring')" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-600 text-white flex items-center gap-1.5 transition">
+        <i data-lucide="users" class="w-3.5 h-3.5"></i> Pemantauan Siswa
+      </button>
+      <button id="navLabBtn" onclick="switchTeacherTab('lab')" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5 transition">
+        <i data-lucide="code" class="w-3.5 h-3.5"></i> Lab Coding Guru
+      </button>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button onclick="toggleTheme()" title="Ubah Tema Light/Dark" class="p-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg border border-slate-300 dark:border-slate-700 transition">
+        <i id="themeIcon" data-lucide="sun" class="w-4 h-4"></i>
+      </button>
+
+      <div id="antiCopyBadge" class="hidden flex items-center gap-1.5 text-[11px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full font-mono">
+        <i data-lucide="shield-alert" class="w-3.5 h-3.5"></i> Ketik Manual
+      </div>
+
+      <div id="pyodideStatus" class="flex items-center gap-2 text-xs bg-slate-100 dark:bg-slate-950 px-3 py-1.5 rounded-full border border-slate-300 dark:border-slate-800">
+        <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+        <span class="text-slate-600 dark:text-slate-400 text-[11px]">Memuat Python...</span>
+      </div>
+
+      <button onclick="openChangePasswordModal()" class="flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-amber-600 dark:text-amber-400 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 transition">
+        <i data-lucide="key-round" class="w-3.5 h-3.5"></i> Password
+      </button>
+
+      <button onclick="handleLogout()" class="flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-slate-800 hover:bg-red-600/20 hover:text-red-600 dark:hover:text-red-400 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 transition">
+        <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Keluar
+      </button>
+    </div>
+  </header>
+
+  <!-- WORKSPACE CODING -->
+  <main id="codingWorkspace" class="flex-1 flex overflow-hidden">
+    <aside class="w-56 bg-slate-50 dark:bg-slate-900/60 border-r border-slate-200 dark:border-slate-800 flex flex-col shrink-0">
+      <div class="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400 tracking-wider flex items-center gap-1.5">
+          <i data-lucide="folder" class="w-3.5 h-3.5"></i> File Server
+        </span>
+        <button onclick="createNewFile()" title="Buat File Baru" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded transition">
+          <i data-lucide="file-plus" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div id="fileListContainer" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+    </aside>
+
+    <section class="flex-1 flex flex-col min-w-0 bg-white dark:bg-slate-950">
+      <div class="h-10 bg-slate-100 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800 px-4 flex items-center justify-between">
+        <div class="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+          <i data-lucide="file-code" class="w-4 h-4 text-blue-500"></i>
+          <span id="activeFileNameText" class="font-mono font-medium">main.py</span>
+          <span id="langBadge" class="text-[10px] bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2 py-0.5 rounded font-mono uppercase">PYTHON</span>
+          <span id="syncStatus" class="text-[10px] text-slate-400 font-mono ml-2">• Tersimpan</span>
+        </div>
+
+        <button onclick="executeCode()" class="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1 rounded-md transition shadow-md shadow-emerald-600/20">
+          <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Jalankan / Preview Code
+        </button>
+      </div>
+
+      <div id="editorContainer" class="flex-1 w-full"></div>
+
+      <div class="h-52 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-col shrink-0">
+        <div class="h-8 bg-slate-200/60 dark:bg-slate-950 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+          <div class="flex items-center gap-2">
+            <button id="tabConsoleBtn" onclick="switchOutputTab('console')" class="text-xs font-mono px-2.5 py-1 rounded-md transition bg-blue-600 text-white flex items-center gap-1.5">
+              <i data-lucide="terminal" class="w-3 h-3"></i> Console Output
+            </button>
+            <button id="tabPreviewBtn" onclick="switchOutputTab('preview')" class="text-xs font-mono px-2.5 py-1 rounded-md transition text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5">
+              <i data-lucide="globe" class="w-3 h-3"></i> Live Preview HTML
+            </button>
+          </div>
+          <button onclick="clearConsole()" class="text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">Riset Output</button>
+        </div>
+
+        <div id="consolePane" class="flex-1 p-3 font-mono text-xs text-emerald-600 dark:text-emerald-400 overflow-y-auto whitespace-pre-wrap select-text">Siap menjalankan program...</div>
+        <div id="previewPane" class="flex-1 w-full h-full hidden bg-white">
+          <iframe id="htmlPreviewIframe" class="w-full h-full border-0"></iframe>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- DASHBOARD PEMANTAUAN GURU -->
+  <main id="teacherDashboard" class="flex-1 flex flex-col p-6 overflow-y-auto hidden bg-slate-100 dark:bg-slate-950">
+    <div class="max-w-7xl mx-auto w-full space-y-6">
+      
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-xl">
+        <div class="flex flex-col md:flex-row items-start md:items-center gap-4 flex-1">
+          <div class="w-full md:w-56">
+            <label class="block text-[10px] text-slate-500 dark:text-slate-400 mb-1 uppercase font-semibold tracking-wider flex items-center gap-1">
+              <i data-lucide="filter" class="w-3 h-3 text-purple-500"></i> Pilih Rombel
+            </label>
+            <select id="classFilterSelect" onchange="fetchTeacherData()" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-purple-500 font-medium">
+              <option value="ALL">Semua Rombel</option>
+            </select>
+          </div>
+
+          <div class="w-full md:w-64">
+            <label class="block text-[10px] text-slate-500 dark:text-slate-400 mb-1 uppercase font-semibold tracking-wider flex items-center gap-1">
+              <i data-lucide="search" class="w-3 h-3 text-purple-500"></i> Cari Siswa
+            </label>
+            <input type="text" id="searchStudentInput" oninput="debounceTeacherSearch()" placeholder="Ketik Nama atau NIPD..." class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-xs rounded-xl px-3.5 py-2 focus:outline-none focus:border-purple-500">
+          </div>
+        </div>
+
+        <div class="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-4 py-2 rounded-xl text-center shrink-0">
+          <div class="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-semibold">Tampil / Total</div>
+          <div class="text-sm font-bold text-purple-600 dark:text-purple-400 font-mono mt-0.5">
+            <span id="displayedStudentCount">0</span> / <span id="totalStudentCount">0</span> Siswa
+          </div>
+        </div>
+      </div>
+
+      <div id="studentGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+  </main>
+
+  <!-- MODAL INSPEKTUR GURU -->
+  <div id="inspectorModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 hidden">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full max-w-4xl h-[80vh] rounded-2xl flex flex-col overflow-hidden shadow-2xl">
+      <div class="p-4 bg-slate-100 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+        <div>
+          <h3 id="inspectStudentName" class="text-sm font-bold text-slate-900 dark:text-white">Mengintip Kode Siswa</h3>
+          <p id="inspectStudentInfo" class="text-xs text-slate-500 dark:text-slate-400">File: main.py</p>
+        </div>
+        <button onclick="closeInspector()" class="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-lg transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <div id="inspectorEditorContainer" class="flex-1 w-full bg-slate-50 dark:bg-slate-950"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

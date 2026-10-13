@@ -1,0 +1,18 @@
+{
+  "guru": [
+    {
+      "username": "guru-demo",
+      "password": "GANTI_PASSWORD_GURU",
+      "name": "Guru Contoh"
+    }
+  ],
+  "siswa": [
+    {
+      "nama": "Siswa Contoh",
+      "nipd": "000000",
+      "jk": "L",
+      "rombel_saat_ini": "X CONTOH",
+      "password": "GANTI_PASSWORD_SISWA"
+    }
+  ]
+}

@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PythonLive Studio - Platform Belajar & Pemantauan Real-Time</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans h-screen flex flex-col overflow-hidden">
+
+  <!-- ================= LAYAR LOGIN MODAL ================= -->
+  <div id="loginModal" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+      
+      <div class="p-6 bg-slate-800/50 border-b border-slate-800 text-center">
+        <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600/20 text-blue-400 mb-3 border border-blue-500/30">
+          <i data-lucide="code-2" class="w-6 h-6"></i>
+        </div>
+        <h2 class="text-2xl font-bold text-white">PythonLive Studio</h2>
+        <p class="text-xs text-slate-400 mt-1">Platform Belajar Coding & Pemantauan Real-time</p>
+      </div>
+
+      <div class="flex border-b border-slate-800 bg-slate-950/50 p-1">
+        <button id="tabSiswaBtn" onclick="switchRoleTab('siswa')" class="flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 bg-blue-600 text-white">
+          <i data-lucide="user" class="w-4 h-4"></i> Siswa
+        </button>
+        <button id="tabGuruBtn" onclick="switchRoleTab('guru')" class="flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 text-slate-400 hover:text-white">
+          <i data-lucide="shield-check" class="w-4 h-4"></i> Guru / Pengajar
+        </button>
+      </div>
+
+      <!-- Form Siswa -->
+      <form id="formSiswa" onsubmit="handleLoginSiswa(event)" class="p-6 space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">nipd Siswa</label>
+          <input type="text" id="siswanipd" required placeholder="Contoh: 1001" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
+          <p class="text-[10px] text-slate-500 mt-1">*Uji coba nipd terdaftar: <code class="text-blue-400">1001</code>, <code class="text-blue-400">1002</code>, atau <code class="text-blue-400">1003</code></p>
+        </div>
+        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-blue-600/20">
+          <i data-lucide="log-in" class="w-4 h-4"></i> Masuk Ke Workspace
+        </button>
+      </form>
+
+      <!-- Form Guru -->
+      <form id="formGuru" onsubmit="handleLoginGuru(event)" class="p-6 space-y-4 hidden">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">PIN / Password Guru</label>
+          <input type="password" id="guruPin" required placeholder="Default PIN: guru123" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+          <p class="text-[10px] text-slate-500 mt-1">*PIN default di users.json: <code class="text-purple-400">guru123</code></p>
+        </div>
+        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-medium py-2.5 rounded-lg transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-purple-600/20">
+          <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Masuk Dashboard Guru
+        </button>
+      </form>
+
+    </div>
+  </div>
+
+  <!-- NAVBAR -->
+  <header class="h-14 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="bg-blue-600/20 p-2 rounded-lg border border-blue-500/30 text-blue-400">
+        <i data-lucide="terminal" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-sm text-white tracking-wide flex items-center gap-2">
+          PythonLive Studio
+          <span id="roleBadge" class="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full uppercase font-mono">Siswa</span>
+        </h1>
+        <p class="text-[11px] text-slate-400" id="userInfoText">Memuat Sesi...</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <div id="pyodideStatus" class="flex items-center gap-2 text-xs bg-slate-950 px-3 py-1.5 rounded-full border border-slate-800">
+        <span class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+        <span class="text-slate-400 text-[11px]">Memuat Python...</span>
+      </div>
+
+      <button onclick="handleLogout()" class="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-red-600/20 hover:text-red-400 hover:border-red-500/30 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+        <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Keluar
+      </button>
+    </div>
+  </header>
+
+  <!-- WORKSPACE SISWA -->
+  <main id="studentWorkspace" class="flex-1 flex overflow-hidden">
+    <aside class="w-56 bg-slate-900/60 border-r border-slate-800 flex flex-col shrink-0">
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-xs font-semibold uppercase text-slate-400 tracking-wider flex items-center gap-1.5">
+          <i data-lucide="folder" class="w-3.5 h-3.5"></i> File Server
+        </span>
+        <button onclick="createNewFile()" class="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition">
+          <i data-lucide="file-plus" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <div id="fileListContainer" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+    </aside>
+
+    <section class="flex-1 flex flex-col min-w-0 bg-slate-950">
+      <div class="h-10 bg-slate-900/40 border-b border-slate-800 px-4 flex items-center justify-between">
+        <div class="flex items-center gap-2 text-xs text-slate-300">
+          <i data-lucide="file-code" class="w-4 h-4 text-blue-400"></i>
+          <span id="activeFileNameText" class="font-mono font-medium">main.py</span>
+          <span id="syncStatus" class="text-[10px] text-slate-500 font-mono ml-2">• Tersimpan Lokal</span>
+        </div>
+
+        <button onclick="executePythonCode()" class="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-1 rounded-md transition shadow-md shadow-emerald-600/20">
+          <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i> Jalankan Code
+        </button>
+      </div>
+
+      <div id="editorContainer" class="flex-1 w-full"></div>
+
+      <div class="h-44 bg-slate-900 border-t border-slate-800 flex flex-col shrink-0">
+        <div class="h-8 bg-slate-950 px-4 flex items-center justify-between border-b border-slate-800">
+          <span class="text-xs font-mono text-slate-400 flex items-center gap-1.5">
+            <i data-lucide="terminal" class="w-3.5 h-3.5 text-emerald-400"></i> Console Output
+          </span>
+          <button onclick="clearConsole()" class="text-[11px] text-slate-500 hover:text-slate-300">Riset Terminal</button>
+        </div>
+        <pre id="consoleOutput" class="flex-1 p-3 font-mono text-xs text-emerald-400 overflow-y-auto whitespace-pre-wrap">Siap menjalankan Python...</pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- DASHBOARD GURU -->
+  <main id="teacherDashboard" class="flex-1 flex flex-col p-6 overflow-y-auto hidden bg-slate-950">
+    <div class="max-w-7xl mx-auto w-full space-y-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xl font-bold text-white flex items-center gap-2">
+            <i data-lucide="users" class="w-5 h-5 text-purple-400"></i> Pemantauan Disk Server Siswa
+          </h2>
+          <p class="text-xs text-slate-400 mt-0.5">Membaca file asli yang tersimpan di folder server Laragon.</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl text-center">
+          <div class="text-xs text-slate-400">Total Siswa Terdaftar</div>
+          <div id="activeStudentCount" class="text-lg font-bold text-purple-400">0</div>
+        </div>
+      </div>
+
+      <div id="studentGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+  </main>
+
+  <script>
+    let currentUser = null;
+    let pyodideInstance = null;
+    let editor = null;
+    let files = {};
+    let activeFileName = 'main.py';
+    let teacherInterval = null;
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      lucide.createIcons();
+      checkSavedSession();
+      initMonacoEditor();
+      await initPyodide();
+    });
+
+    function checkSavedSession() {
+      const saved = localStorage.getItem('py_user_session');
+      if (saved) {
+        currentUser = JSON.parse(saved);
+        applyUserSession();
+      } else {
+        document.getElementById('loginModal').classList.remove('hidden');
+      }
+    }
+
+    function switchRoleTab(role) {
+      const tabSiswa = document.getElementById('tabSiswaBtn');
+      const tabGuru = document.getElementById('tabGuruBtn');
+      const formSiswa = document.getElementById('formSiswa');
+      const formGuru = document.getElementById('formGuru');
+
+      if (role === 'siswa') {
+        tabSiswa.className = "flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 bg-blue-600 text-white";
+        tabGuru.className = "flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 text-slate-400 hover:text-white";
+        formSiswa.classList.remove('hidden');
+        formGuru.classList.add('hidden');
+      } else {
+        tabGuru.className = "flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 bg-purple-600 text-white";
+        tabSiswa.className = "flex-1 py-2.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-2 text-slate-400 hover:text-white";
+        formGuru.classList.remove('hidden');
+        formSiswa.classList.add('hidden');
+      }
+    }
+
+    async function handleLoginSiswa(e) {
+      e.preventDefault();
+      const nipd = document.getElementById('siswanipd').value.trim();
+
+      const res = await fetch('api.php?action=login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ role: 'siswa', nipd: nipd })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        currentUser = { ...data.user, role: 'siswa' };
+        localStorage.setItem('py_user_session', JSON.stringify(currentUser));
+        applyUserSession();
+      } else {
+        alert(data.message);
+      }
+    }
+
+    async function handleLoginGuru(e) {
+      e.preventDefault();
+      const pin = document.getElementById('guruPin').value.trim();
+
+      const res = await fetch('api.php?action=login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ role: 'guru', pin: pin })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        currentUser = { ...data.user, role: 'guru' };
+        localStorage.setItem('py_user_session', JSON.stringify(currentUser));
+        applyUserSession();
+      } else {
+        alert(data.message);
+      }
+    }
+
+    function applyUserSession() {
+      document.getElementById('loginModal').classList.add('hidden');
+      const userInfoText = document.getElementById('userInfoText');
+      const roleBadge = document.getElementById('roleBadge');
+
+      if (currentUser.role === 'siswa') {
+        roleBadge.textContent = 'Siswa';
+        roleBadge.className = 'text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded-full uppercase font-mono';
+        userInfoText.textContent = `${currentUser.nama} (nipd: ${currentUser.nipd})`;
+        
+        document.getElementById('studentWorkspace').classList.remove('hidden');
+        document.getElementById('teacherDashboard').classList.add('hidden');
+        
+        loadStudentFilesFromServer();
+      } else {
+        roleBadge.textContent = 'Guru';
+        roleBadge.className = 'text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-0.5 rounded-full uppercase font-mono';
+        userInfoText.textContent = `${currentUser.nama}`;
+
+        document.getElementById('studentWorkspace').classList.add('hidden');
+        document.getElementById('teacherDashboard').classList.remove('hidden');
+
+        startTeacherMonitoring();
+      }
+    }
+
+    function handleLogout() {
+      if (confirm("Apakah Anda yakin ingin keluar?")) {
+        localStorage.removeItem('py_user_session');
+        location.reload();
+      }
+    }
+
+    // LOAD & SAVE FILES
+    async function loadStudentFilesFromServer() {
+      const res = await fetch(`api.php?action=get_files&nipd=${currentUser.nipd}`);
+      const data = await res.json();
+      if (data.success) {
+        files = data.files;
+        activeFileName = Object.keys(files)[0] || 'main.py';
+        document.getElementById('activeFileNameText').textContent = activeFileName;
+        if (editor) editor.setValue(files[activeFileName] || '');
+        renderFileList();
+      }
+    }
+
+    let saveTimeout = null;
+    function debounceSave() {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(async () => {
+        document.getElementById('syncStatus').textContent = '• Menyimpan ke Server...';
+        await fetch('api.php?action=save_file', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            nipd: currentUser.nipd,
+            filename: activeFileName,
+            content: editor.getValue()
+          })
+        });
+        document.getElementById('syncStatus').textContent = '• Tersimpan di Server';
+      }, 600);
+    }
+
+    function renderFileList() {
+      const container = document.getElementById('fileListContainer');
+      container.innerHTML = '';
+
+      Object.keys(files).forEach(fileName => {
+        const isActive = fileName === activeFileName;
+        const item = document.createElement('div');
+        item.className = `flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer group transition ${
+          isActive ? 'bg-blue-600/20 text-blue-300 font-medium border border-blue-500/30' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+        }`;
+        
+        item.innerHTML = `
+          <div class="flex items-center gap-2 truncate" onclick="selectFile('${fileName}')">
+            <i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-500'}"></i>
+            <span class="truncate">${fileName}</span>
+          </div>
+          ${Object.keys(files).length > 1 ? `<button onclick="deleteFile('${fileName}')" class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"><i data-lucide="trash-2" class="w-3 h-3"></i></button>` : ''}
+        `;
+        container.appendChild(item);
+      });
+      lucide.createIcons();
+    }
+
+    async function createNewFile() {
+      const name = prompt("Nama file Python baru:", "latihan.py");
+      if (!name) return;
+      let formattedName = name.endsWith('.py') ? name : `${name}.py`;
+
+      files[formattedName] = "# File Baru\n";
+      activeFileName = formattedName;
+      document.getElementById('activeFileNameText').textContent = activeFileName;
+      if (editor) editor.setValue(files[activeFileName]);
+      renderFileList();
+      debounceSave();
+    }
+
+    function selectFile(fileName) {
+      activeFileName = fileName;
+      document.getElementById('activeFileNameText').textContent = activeFileName;
+      if (editor) editor.setValue(files[activeFileName] || '');
+      renderFileList();
+    }
+
+    async function deleteFile(fileName) {
+      if (!confirm(`Hapus ${fileName}?`)) return;
+
+      await fetch('api.php?action=delete_file', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ nipd: currentUser.nipd, filename: fileName })
+      });
+
+      delete files[fileName];
+      activeFileName = Object.keys(files)[0] || 'main.py';
+      if (editor) editor.setValue(files[activeFileName] || '');
+      renderFileList();
+    }
+
+    // PYTHON & MONACO
+    async function initPyodide() {
+      const statusElem = document.getElementById('pyodideStatus');
+      try {
+        pyodideInstance = await loadPyodide({
+          indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"
+        });
+        pyodideInstance.setStdout({ batched: (msg) => appendConsole(msg) });
+        pyodideInstance.setStderr({ batched: (msg) => appendConsole(`[Error] ${msg}`) });
+
+        await pyodideInstance.runPythonAsync(`
+import builtins, js
+def custom_input(p=""):
+    r = js.prompt(str(p) if p else "Input:")
+    r = r if r is not None else ""
+    print(f"{p}{r}")
+    return r
+builtins.input = custom_input
+        `);
+
+        statusElem.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span><span class="text-emerald-400 text-[11px] font-medium">Python Ready</span>`;
+      } catch (err) {
+        statusElem.innerHTML = `<span class="w-2 h-2 rounded-full bg-red-500"></span><span class="text-red-400 text-[11px]">Gagal memuat Python</span>`;
+      }
+    }
+
+    async function executePythonCode() {
+      if (!pyodideInstance) return alert("Pyodide belum siap!");
+      document.getElementById('consoleOutput').textContent = "--- Eksekusi Dimulai ---\n";
+      try {
+        await pyodideInstance.runPythonAsync(editor.getValue());
+        appendConsole("\n--- Selesai ---");
+      } catch (err) {
+        appendConsole(`\n[Execution Error]: ${err.message}`);
+      }
+    }
+
+    function appendConsole(text) {
+      const consoleElem = document.getElementById('consoleOutput');
+      consoleElem.textContent += text + "\n";
+      consoleElem.scrollTop = consoleElem.scrollHeight;
+    }
+
+    function clearConsole() {
+      document.getElementById('consoleOutput').textContent = "Console dibersihkan.\n";
+    }
+
+    function initMonacoEditor() {
+      require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+      require(['vs/editor/editor.main'], function () {
+        editor = monaco.editor.create(document.getElementById('editorContainer'), {
+          value: '# Memuat...',
+          language: 'python',
+          theme: 'vs-dark',
+          automaticLayout: true,
+          fontSize: 13,
+          minimap: { enabled: false }
+        });
+
+        editor.onDidChangeModelContent(() => {
+          files[activeFileName] = editor.getValue();
+          debounceSave();
+        });
+      });
+    }
+
+    // MONITORING GURU
+    function startTeacherMonitoring() {
+      fetchTeacherData();
+      teacherInterval = setInterval(fetchTeacherData, 2000); // Refresh data server setiap 2 detik
+    }
+
+    async function fetchTeacherData() {
+      const res = await fetch('api.php?action=get_all_students_data');
+      const data = await res.json();
+      if (!data.success) return;
+
+      const grid = document.getElementById('studentGrid');
+      grid.innerHTML = '';
+      
+      data.students.forEach(s => {
+        const card = document.createElement('div');
+        card.className = "bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between shadow-lg";
+        card.innerHTML = `
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-slate-200">${s.name} (nipd: ${s.nipd})</span>
+              <span class="text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded-md font-mono">${s.class}</span>
+            </div>
+            <p class="text-xs text-slate-400 flex items-center gap-1 mb-2">
+              <i data-lucide="file-code" class="w-3.5 h-3.5 text-blue-400"></i> ${s.activeFile}
+            </p>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 font-mono text-[11px] text-slate-300 h-28 overflow-hidden">
+              <pre>${escapeHtml(s.code)}</pre>
+            </div>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+
+      document.getElementById('activeStudentCount').textContent = data.students.length;
+      lucide.createIcons();
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  </script>
+</body>
+</html>
