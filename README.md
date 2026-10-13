@@ -1,6 +1,9 @@
 # PythonLive Studio
 
 Aplikasi belajar coding multi-bahasa berbasis Vite, Monaco Editor, dan Pyodide, dengan API PHP untuk akun serta penyimpanan file.
+Antarmuka menyesuaikan desktop, tablet, dan ponsel; di layar kecil daftar file dan navigasi guru ditampilkan dalam baris yang dapat digeser.
+Lab Guru memakai workspace kode yang sama: Python dan JavaScript dapat dijalankan, HTML dan CSS dapat dipratinjau langsung. Status runtime Python dan pemuatan data siswa ditampilkan di area kerja/dashboard.
+Saat guru mengintip file siswa, kode tampil hanya-baca tetapi dapat diuji dari dialog yang sama. Hasil Python/JavaScript masuk ke Console; HTML/CSS dirender di tab Preview yang disandbox, tanpa menyimpan perubahan ke file siswa.
 
 ## Persyaratan
 
@@ -44,6 +47,8 @@ Setiap build membersihkan hanya folder output terkelola `assets/` dan `pyodide/`
 
 - `api.php` menangani login, pengelolaan kata sandi, file siswa/guru, dan data pemantauan.
 - Data file disimpan di `data/`; folder ini tidak dimasukkan ke Git.
+- API menggunakan sesi PHP `HttpOnly`/`SameSite`, memeriksa role di server, dan mengikat operasi file ke akun pada sesi. Semua permintaan perubahan harus menyertakan header aplikasi.
+- Guru dapat membuka **Kelola Akun** untuk membuat akun siswa/guru dan mereset password akun lain. Password baru minimal 8 karakter dan disimpan sebagai hash; berikan password awal/reset kepada pemilik akun secara langsung. Guru mengganti password akunnya sendiri dari menu **Password**.
 - Siapkan file konfigurasi dan akun lokal sebelum menjalankan aplikasi. Di PowerShell:
 
   ```powershell
@@ -54,6 +59,9 @@ Setiap build membersihkan hanya folder output terkelola `assets/` dan `pyodide/`
 - Sesuaikan `VITE_APP_TITLE` dan `VITE_API_BASE_URL` pada `.env.local`. Kosongkan `VITE_API_BASE_URL` untuk memakai URL relatif aplikasi, termasuk pada `http://localhost/koding-python/`.
 - Ganti akun dan password dummy pada `users.json` dengan data lokal yang benar. File ini memakai password teks biasa; jangan gunakan password yang dipakai di layanan lain dan jangan unggah file aktual ke Git.
 - `.env*` dan `users.json` diabaikan Git. `.env.example` dan `users.json.example` adalah template aman untuk dibagikan; variabel `VITE_*` akan dimasukkan ke bundle browser sehingga tidak boleh berisi rahasia.
+- Apache harus mengizinkan aturan `.htaccess` (`AllowOverride`) agar akses langsung ke `users.json`, `.env*`, dan seluruh folder `data/` ditolak. Verifikasi dengan mencoba URL file tersebut; seharusnya server menjawab `403`.
+- Password lama dalam `users.json` akan di-hash otomatis saat masing-masing akun berhasil login. Jika server pernah dapat diakses dari jaringan saat `users.json` belum terlindungi, anggap password mungkin sudah terekspos dan ganti semua password secepatnya.
+- Gunakan HTTPS sebelum aplikasi dibuka melalui jaringan publik. Cookie sesi baru ditandai `Secure` otomatis pada koneksi HTTPS.
 
 ## Catatan
 

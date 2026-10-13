@@ -27,17 +27,27 @@ const PYODIDE_INDEX_URL = import.meta.env.DEV
 
 async function apiFetch(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
-  return await fetch(url, options);
+  const headers = new Headers(options.headers || {});
+  if (options.method && options.method.toUpperCase() !== 'GET') {
+    headers.set('X-Requested-With', 'XMLHttpRequest');
+  }
+  return await fetch(url, { ...options, headers, credentials: 'same-origin' });
 }
 
 let currentUser = null;
 let pyodideInstance = null;
+let pythonOutputPaneId = 'consolePane';
 let editor = null;
 let inspectorEditor = null;
+let inspectorFileName = 'main.py';
+let inspectorExecutionCleanup = null;
 let files = {};
 let activeFileName = 'main.py';
 let teacherInterval = null;
 let searchTimeout = null;
+let teacherDataLoaded = false;
+let teacherFetchInFlight = false;
+let teacherDataHadError = false;
 let currentTheme = localStorage.getItem('py_theme') || 'dark';
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -48,13 +58,14 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   applyTheme(currentTheme);
   refreshIcons();
+  setupAccountManagement();
 
   // 1. Inisialisasi Monaco Editor lebih dulu agar elemen siap
   initMonacoEditor();
   setupAntiCopyPaste();
 
   // 2. Muat Sesi & File Siswa dari Backend
-  checkSavedSession();
+  await checkSavedSession();
 
   // 3. Muat Pyodide
   await initPyodide();
@@ -62,6 +73,33 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 function refreshIcons() {
   createIcons({ icons });
+}
+
+function setButtonLoading(button, loading, label) {
+  if (!button) return;
+
+  if (loading) {
+    if (!button.dataset.originalContent) {
+      button.dataset.originalContent = button.innerHTML;
+    }
+    button.disabled = true;
+    button.innerHTML = `<span class="loading-spinner loading-spinner-sm" aria-hidden="true"></span><span>${label}</span>`;
+    return;
+  }
+
+  button.disabled = false;
+  if (button.dataset.originalContent) {
+    button.innerHTML = button.dataset.originalContent;
+    delete button.dataset.originalContent;
+    refreshIcons();
+  }
+}
+
+function setStartupLoading(loading, message = '') {
+  const loader = document.getElementById('startupLoader');
+  const messageElement = document.getElementById('startupLoaderMessage');
+  if (messageElement && message) messageElement.textContent = message;
+  loader?.classList.toggle('hidden', !loading);
 }
 
 window.toggleTheme = function() {
@@ -121,14 +159,23 @@ function setupAntiCopyPaste() {
   }, true);
 }
 
-function checkSavedSession() {
-  const saved = localStorage.getItem('py_user_session');
-  if (saved) {
-    currentUser = JSON.parse(saved);
-    applyUserSession();
-  } else {
-    document.getElementById('loginModal').classList.remove('hidden');
+async function checkSavedSession() {
+  localStorage.removeItem('py_user_session');
+  try {
+    const res = await apiFetch('/api.php?action=session');
+    const data = await res.json();
+    if (data.success) {
+      currentUser = { ...data.user, role: data.role };
+      applyUserSession();
+      return;
+    }
+  } catch (err) {
+    console.error('Gagal memeriksa sesi login:', err);
+    alert('Gagal terhubung ke server. Periksa koneksi dan konfigurasi API.');
+  } finally {
+    setStartupLoading(false);
   }
+  document.getElementById('loginModal').classList.remove('hidden');
 }
 
 window.switchRoleTab = function(role) {
@@ -154,7 +201,9 @@ window.handleLoginSiswa = async function(e) {
   e.preventDefault();
   const nipd = document.getElementById('siswaNipd').value.trim();
   const password = document.getElementById('siswaPassword').value.trim();
+  const button = document.querySelector('#formSiswa button[type="submit"]');
 
+  setButtonLoading(button, true, 'Memverifikasi...');
   try {
     const res = await apiFetch('/api.php?action=login', {
       method: 'POST',
@@ -165,13 +214,14 @@ window.handleLoginSiswa = async function(e) {
 
     if (data.success) {
       currentUser = { ...data.user, role: 'siswa' };
-      localStorage.setItem('py_user_session', JSON.stringify(currentUser));
       applyUserSession();
     } else {
       alert(data.message);
     }
   } catch (err) {
     alert("Gagal terhubung ke server API!");
+  } finally {
+    setButtonLoading(button, false);
   }
 };
 
@@ -179,7 +229,9 @@ window.handleLoginGuru = async function(e) {
   e.preventDefault();
   const username = document.getElementById('guruUsername').value.trim();
   const password = document.getElementById('guruPassword').value.trim();
+  const button = document.querySelector('#formGuru button[type="submit"]');
 
+  setButtonLoading(button, true, 'Memverifikasi...');
   try {
     const res = await apiFetch('/api.php?action=login', {
       method: 'POST',
@@ -190,13 +242,14 @@ window.handleLoginGuru = async function(e) {
 
     if (data.success) {
       currentUser = { ...data.user, role: 'guru' };
-      localStorage.setItem('py_user_session', JSON.stringify(currentUser));
       applyUserSession();
     } else {
       alert(data.message);
     }
   } catch (err) {
     alert("Gagal terhubung ke server API!");
+  } finally {
+    setButtonLoading(button, false);
   }
 };
 
@@ -212,12 +265,10 @@ window.handleChangePassword = async function(e) {
   e.preventDefault();
   const old_password = document.getElementById('oldPasswordInput').value.trim();
   const new_password = document.getElementById('newPasswordInput').value.trim();
-  const id = currentUser.role === 'siswa' ? currentUser.nipd : currentUser.username;
-
   const res = await apiFetch('/api.php?action=change_password', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ role: currentUser.role, id, old_password, new_password })
+    body: JSON.stringify({ old_password, new_password })
   });
 
   const data = await res.json();
@@ -227,6 +278,8 @@ window.handleChangePassword = async function(e) {
     document.getElementById('oldPasswordInput').value = '';
     document.getElementById('newPasswordInput').value = '';
     closeChangePasswordModal();
+    alert('Silakan login kembali dengan password baru.');
+    location.reload();
   }
 };
 
@@ -264,28 +317,214 @@ function applyUserSession() {
 window.switchTeacherTab = function(tab) {
   const navMonitorBtn = document.getElementById('navMonitorBtn');
   const navLabBtn = document.getElementById('navLabBtn');
+  const navAccountsBtn = document.getElementById('navAccountsBtn');
   const teacherDashboard = document.getElementById('teacherDashboard');
+  const teacherAccounts = document.getElementById('teacherAccounts');
   const codingWorkspace = document.getElementById('codingWorkspace');
+  const activeClass = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-600 text-white flex items-center gap-1.5 transition';
+  const inactiveClass = 'px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5 transition';
+  const isMonitoring = tab === 'monitoring';
+  const isAccounts = tab === 'accounts';
 
-  if (tab === 'monitoring') {
-    navMonitorBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-600 text-white flex items-center gap-1.5 transition";
-    navLabBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5 transition";
-    teacherDashboard.classList.remove('hidden');
-    codingWorkspace.classList.add('hidden');
-  } else {
-    navLabBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-600 text-white flex items-center gap-1.5 transition";
-    navMonitorBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1.5 transition";
-    teacherDashboard.classList.add('hidden');
-    codingWorkspace.classList.remove('hidden');
+  navMonitorBtn.className = isMonitoring ? activeClass : inactiveClass;
+  navLabBtn.className = !isMonitoring && !isAccounts ? activeClass : inactiveClass;
+  navAccountsBtn.className = isAccounts ? activeClass : inactiveClass;
+  teacherDashboard.classList.toggle('hidden', !isMonitoring);
+  teacherAccounts.classList.toggle('hidden', !isAccounts);
+  codingWorkspace.classList.toggle('hidden', isMonitoring || isAccounts);
 
+  if (isAccounts) {
+    loadAccounts();
+  } else if (!isMonitoring) {
     loadUserFilesFromServer();
+    requestAnimationFrame(() => editor?.layout());
   }
 };
 
-window.handleLogout = function() {
+function setupAccountManagement() {
+  const roleSelect = document.getElementById('newAccountRole');
+  roleSelect.addEventListener('change', updateNewAccountFields);
+  document.getElementById('createAccountForm').addEventListener('submit', createAccount);
+  document.getElementById('resetAccountPasswordForm').addEventListener('submit', resetAccountPassword);
+  updateNewAccountFields();
+}
+
+function updateNewAccountFields() {
+  const isStudent = document.getElementById('newAccountRole').value === 'siswa';
+  document.getElementById('newAccountIdentifierLabel').textContent = isStudent ? 'NIPD' : 'Username';
+  document.getElementById('newAccountNameLabel').textContent = isStudent ? 'Nama siswa' : 'Nama guru';
+  document.getElementById('newStudentFields').classList.toggle('hidden', !isStudent);
+  document.getElementById('newAccountClass').required = isStudent;
+}
+
+function setAccountFormMessage(elementId, message, isError = false) {
+  const element = document.getElementById(elementId);
+  element.textContent = message;
+  element.classList.remove('hidden', 'text-red-600', 'dark:text-red-400', 'text-emerald-600', 'dark:text-emerald-400');
+  element.classList.add(isError ? 'text-red-600' : 'text-emerald-600');
+  element.classList.add(isError ? 'dark:text-red-400' : 'dark:text-emerald-400');
+}
+
+window.loadAccounts = async function() {
+  if (currentUser?.role !== 'guru') return;
+  const container = document.getElementById('accountList');
+  const count = document.getElementById('accountCount');
+  container.innerHTML = '<div class="loading-placeholder"><span class="loading-spinner loading-spinner-sm"></span><span>Memuat akun...</span></div>';
+  try {
+    const response = await apiFetch('/api.php?action=get_accounts');
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || 'Gagal memuat akun.');
+
+    count.textContent = `${data.accounts.length} akun`;
+    container.replaceChildren();
+    if (data.accounts.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'py-8 text-center text-sm text-slate-500 dark:text-slate-400';
+      empty.textContent = 'Belum ada akun.';
+      container.appendChild(empty);
+      return;
+    }
+
+    data.accounts.forEach((account) => {
+      const row = document.createElement('div');
+      row.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-4';
+
+      const details = document.createElement('div');
+      details.className = 'min-w-0';
+      const title = document.createElement('p');
+      title.className = 'truncate text-sm font-semibold text-slate-900 dark:text-white';
+      title.textContent = account.name || '(Nama belum diatur)';
+      const subtitle = document.createElement('p');
+      subtitle.className = 'mt-0.5 text-xs text-slate-500 dark:text-slate-400';
+      const roleLabel = account.role === 'siswa' ? `Siswa · NIPD ${account.identifier}` : `Guru · ${account.identifier}`;
+      subtitle.textContent = account.class ? `${roleLabel} · ${account.class}` : roleLabel;
+      details.append(title, subtitle);
+
+      const resetButton = document.createElement('button');
+      resetButton.type = 'button';
+      resetButton.className = 'shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-300';
+      resetButton.textContent = account.role === 'guru' && account.identifier === currentUser.username
+        ? 'Akun Anda'
+        : 'Reset password';
+      resetButton.disabled = account.role === 'guru' && account.identifier === currentUser.username;
+      resetButton.title = resetButton.disabled ? 'Gunakan menu Password untuk mengganti password sendiri.' : '';
+      resetButton.addEventListener('click', () => openResetAccountPassword(account));
+      row.append(details, resetButton);
+      container.appendChild(row);
+    });
+  } catch (error) {
+    console.error('Gagal memuat daftar akun:', error);
+    count.textContent = 'Daftar akun gagal dimuat';
+    container.replaceChildren();
+    const message = document.createElement('p');
+    message.className = 'py-6 text-center text-sm text-red-600 dark:text-red-400';
+    message.textContent = error.message || 'Terjadi kesalahan saat memuat akun.';
+    container.appendChild(message);
+  }
+};
+
+async function createAccount(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  document.getElementById('createAccountMessage').classList.add('hidden');
+  const role = document.getElementById('newAccountRole').value;
+  const body = {
+    role,
+    identifier: document.getElementById('newAccountIdentifier').value.trim(),
+    name: document.getElementById('newAccountName').value.trim(),
+    password: document.getElementById('newAccountPassword').value.trim()
+  };
+  if (role === 'siswa') {
+    body.rombel = document.getElementById('newAccountClass').value.trim();
+    body.gender = document.getElementById('newAccountGender').value;
+  }
+
+  setButtonLoading(submitButton, true, 'Menyimpan...');
+  try {
+    const response = await apiFetch('/api.php?action=create_account', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || 'Gagal menambahkan akun.');
+
+    form.reset();
+    updateNewAccountFields();
+    setAccountFormMessage('createAccountMessage', data.message);
+    await Promise.all([loadAccounts(), loadClassesDropdown()]);
+  } catch (error) {
+    console.error('Gagal menambahkan akun:', error);
+    setAccountFormMessage('createAccountMessage', error.message || 'Terjadi kesalahan saat menambahkan akun.', true);
+  } finally {
+    setButtonLoading(submitButton, false);
+  }
+}
+
+function openResetAccountPassword(account) {
+  if (account.role === 'guru' && account.identifier === currentUser?.username) return;
+  const modal = document.getElementById('resetAccountPasswordModal');
+  const form = document.getElementById('resetAccountPasswordForm');
+  form.dataset.role = account.role;
+  form.dataset.identifier = account.identifier;
+  document.getElementById('resetAccountDescription').textContent = `${account.name} · ${account.role === 'siswa' ? 'NIPD' : 'Username'} ${account.identifier}`;
+  document.getElementById('resetAccountMessage').classList.add('hidden');
+  document.getElementById('resetAccountPassword').value = '';
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  document.getElementById('resetAccountPassword').focus();
+}
+
+window.closeResetAccountPassword = function() {
+  const modal = document.getElementById('resetAccountPasswordModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  document.getElementById('resetAccountPasswordForm').reset();
+};
+
+async function resetAccountPassword(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  document.getElementById('resetAccountMessage').classList.add('hidden');
+  setButtonLoading(submitButton, true, 'Menyimpan...');
+  try {
+    const response = await apiFetch('/api.php?action=reset_account_password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        role: form.dataset.role,
+        identifier: form.dataset.identifier,
+        password: document.getElementById('resetAccountPassword').value.trim()
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || 'Gagal mereset password.');
+    window.closeResetAccountPassword();
+    alert(data.message);
+  } catch (error) {
+    console.error('Gagal mereset password akun:', error);
+    setAccountFormMessage('resetAccountMessage', error.message || 'Terjadi kesalahan saat mereset password.', true);
+  } finally {
+    setButtonLoading(submitButton, false);
+  }
+}
+
+window.handleLogout = async function() {
   if (confirm("Apakah Anda yakin ingin keluar?")) {
-    localStorage.removeItem('py_user_session');
-    location.reload();
+    try {
+      const res = await apiFetch('/api.php?action=logout', { method: 'POST' });
+      const data = await res.json();
+      if (!data.success) {
+        alert(data.message || 'Gagal mengakhiri sesi.');
+        return;
+      }
+      location.reload();
+    } catch (err) {
+      console.error('Gagal logout:', err);
+      alert('Gagal terhubung ke server saat logout.');
+    }
   }
 };
 
@@ -298,6 +537,8 @@ function getLanguage(filename) {
 }
 
 async function loadUserFilesFromServer() {
+  const container = document.getElementById('fileListContainer');
+  container.innerHTML = '<div class="loading-placeholder"><span class="loading-spinner loading-spinner-sm"></span><span>Memuat file...</span></div>';
   try {
     const id = currentUser.role === 'siswa' ? currentUser.nipd : currentUser.username;
     const res = await apiFetch(`/api.php?action=get_files&role=${currentUser.role}&id=${id}`);
@@ -311,33 +552,63 @@ async function loadUserFilesFromServer() {
         monaco.editor.setModelLanguage(editor.getModel(), getLanguage(activeFileName));
       }
       renderFileList();
+    } else {
+      throw new Error(data.message || 'Gagal memuat file.');
     }
-  } catch (e) {}
+  } catch (err) {
+    console.error('Gagal memuat file workspace:', err);
+    container.innerHTML = '<div class="loading-error">File gagal dimuat. Muat ulang atau periksa koneksi.</div>';
+  }
 }
 
 function updateActiveFileInfo() {
   document.getElementById('activeFileNameText').textContent = activeFileName;
   const lang = getLanguage(activeFileName).toUpperCase();
   document.getElementById('langBadge').textContent = lang;
+  const runButton = document.getElementById('runCodeButton');
+  const label = runButton?.querySelector('[data-run-label]');
+  const labels = {
+    python: 'Jalankan Python',
+    html: 'Preview HTML',
+    javascript: 'Jalankan JavaScript',
+    css: 'Preview CSS'
+  };
+  if (label) label.textContent = labels[getLanguage(activeFileName)] || 'Tidak ada runner';
+  if (runButton) {
+    runButton.disabled = !labels[getLanguage(activeFileName)];
+    runButton.title = labels[getLanguage(activeFileName)] || 'Tipe file ini tidak mendukung preview atau runner.';
+  }
 }
 
 let saveTimeout = null;
 function debounceSave() {
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(async () => {
-    document.getElementById('syncStatus').textContent = '• Menyimpan...';
-    const id = currentUser.role === 'siswa' ? currentUser.nipd : currentUser.username;
-    await apiFetch('/api.php?action=save_file', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        role: currentUser.role,
-        id: id,
-        filename: activeFileName,
-        content: editor.getValue()
-      })
-    });
-    document.getElementById('syncStatus').textContent = '• Tersimpan';
+    const status = document.getElementById('syncStatus');
+    status.textContent = '• Menyimpan...';
+    status.classList.add('sync-saving');
+    try {
+      const res = await apiFetch('/api.php?action=save_file', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          filename: activeFileName,
+          content: editor.getValue()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Gagal menyimpan file.');
+      }
+      status.textContent = '• Tersimpan';
+      status.classList.remove('sync-error');
+    } catch (err) {
+      console.error('Gagal menyimpan file:', err);
+      status.textContent = '• Gagal menyimpan';
+      status.classList.add('sync-error');
+    } finally {
+      status.classList.remove('sync-saving');
+    }
   }, 600);
 }
 
@@ -348,7 +619,7 @@ function renderFileList() {
   Object.keys(files).forEach(fileName => {
     const isActive = fileName === activeFileName;
     const item = document.createElement('div');
-    item.className = `flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer group transition ${
+    item.className = `min-w-36 md:min-w-0 shrink-0 flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs cursor-pointer group transition ${
       isActive ? 'bg-blue-600/20 text-blue-600 dark:text-blue-300 font-medium border border-blue-500/30' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-slate-200'
     }`;
     
@@ -357,7 +628,7 @@ function renderFileList() {
         <i data-lucide="file-text" class="w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-500' : 'text-slate-400'}"></i>
         <span class="truncate">${fileName}</span>
       </div>
-      ${Object.keys(files).length > 1 ? `<button onclick="deleteFile('${fileName}')" class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500"><i data-lucide="trash-2" class="w-3 h-3"></i></button>` : ''}
+      ${Object.keys(files).length > 1 ? `<button onclick="deleteFile('${fileName}')" class="p-1 opacity-100 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100"><i data-lucide="trash-2" class="w-3 h-3"></i></button>` : ''}
     `;
     container.appendChild(item);
   });
@@ -421,13 +692,14 @@ window.deleteFile = async function(fileName) {
 
 async function initPyodide() {
   const statusElem = document.getElementById('pyodideStatus');
+  setPythonRuntimeStatus('loading');
   try {
     pyodideInstance = await loadPyodide({
       indexURL: PYODIDE_INDEX_URL
     });
     
-    pyodideInstance.setStdout({ batched: (msg) => appendConsole(msg) });
-    pyodideInstance.setStderr({ batched: (msg) => appendConsole(`[Error] ${msg}`) });
+    pyodideInstance.setStdout({ batched: (msg) => appendConsole(msg, pythonOutputPaneId) });
+    pyodideInstance.setStderr({ batched: (msg) => appendConsole(`[Error] ${msg}`, pythonOutputPaneId) });
 
     await pyodideInstance.runPythonAsync(`
 import builtins, js
@@ -439,11 +711,25 @@ def custom_input(p=""):
 builtins.input = custom_input
     `);
 
-    statusElem.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500"></span><span class="text-emerald-600 dark:text-emerald-400 text-[11px] font-medium">Python Ready</span>`;
+    setPythonRuntimeStatus('ready');
   } catch (err) {
     console.error("Error Pyodide:", err);
-    statusElem.innerHTML = `<span class="w-2 h-2 rounded-full bg-red-500"></span><span class="text-red-500 text-[11px]">Gagal Pyodide</span>`;
+    setPythonRuntimeStatus('error', err.message || 'Runtime Python gagal dimuat.');
   }
+}
+
+function setPythonRuntimeStatus(state, detail = '') {
+  const statusElement = document.getElementById('pythonRuntimeStatus');
+  if (!statusElement) return;
+  const markup = state === 'ready'
+    ? '<span class="status-indicator status-indicator-ready" aria-hidden="true"></span><span class="text-emerald-700 dark:text-emerald-400 font-medium">Python Ready</span>'
+    : state === 'error'
+      ? '<span class="status-indicator status-indicator-error" aria-hidden="true"></span><span class="text-red-600 dark:text-red-400 font-medium">Python gagal dimuat</span>'
+      : '<span class="loading-spinner loading-spinner-sm" aria-hidden="true"></span><span class="text-slate-600 dark:text-slate-300">Menyiapkan Python...</span>';
+
+  statusElement.innerHTML = markup;
+  statusElement.title = detail;
+  statusElement.classList.toggle('runtime-error', state === 'error');
 }
 
 window.switchOutputTab = function(tab) {
@@ -468,43 +754,55 @@ window.switchOutputTab = function(tab) {
 window.executeCode = async function() {
   const lang = getLanguage(activeFileName);
   const code = editor.getValue();
+  const button = document.getElementById('runCodeButton');
 
   if (lang === 'python') {
     window.switchOutputTab('console');
-    if (!pyodideInstance) return alert("Pyodide belum siap!");
+    if (!pyodideInstance) return alert("Python masih disiapkan. Silakan coba kembali setelah status Python Ready.");
     document.getElementById('consolePane').textContent = "--- Eksekusi Python ---\n";
+    setButtonLoading(button, true, 'Menjalankan...');
     try {
       await pyodideInstance.runPythonAsync(code);
       appendConsole("\n--- Selesai ---");
     } catch (err) {
       appendConsole(`\n[Execution Error]: ${err.message}`);
+    } finally {
+      setButtonLoading(button, false);
     }
   } else if (lang === 'html') {
     window.switchOutputTab('preview');
     const iframe = document.getElementById('htmlPreviewIframe');
     iframe.srcdoc = code;
+  } else if (lang === 'css') {
+    window.switchOutputTab('preview');
+    const iframe = document.getElementById('htmlPreviewIframe');
+    iframe.srcdoc = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:system-ui,sans-serif;padding:2rem;color:#334155} .preview-sample{padding:1rem;border:1px solid #cbd5e1;border-radius:.75rem} ${code}</style></head><body><h2>Preview CSS</h2><div class="preview-sample"><h3>Contoh elemen</h3><p>Gunakan selector seperti <code>body</code>, <code>h3</code>, atau <code>.preview-sample</code>.</p><button>Contoh tombol</button></div></body></html>`;
   } else if (lang === 'javascript') {
     window.switchOutputTab('console');
     document.getElementById('consolePane').textContent = "--- Eksekusi JavaScript ---\n";
+    setButtonLoading(button, true, 'Menjalankan...');
+    const oldLog = console.log;
     try {
-      const oldLog = console.log;
       console.log = function(...args) {
         appendConsole(args.join(' '));
         oldLog.apply(console, args);
       };
       eval(code);
-      console.log = oldLog;
       appendConsole("\n--- Selesai ---");
     } catch (err) {
       appendConsole(`\n[JS Error]: ${err.message}`);
+    } finally {
+      console.log = oldLog;
+      setButtonLoading(button, false);
     }
   } else {
     alert("File ini tidak memiliki runner otomatis.");
   }
 };
 
-function appendConsole(text) {
-  const consolePane = document.getElementById('consolePane');
+function appendConsole(text, paneId = 'consolePane') {
+  const consolePane = document.getElementById(paneId);
+  if (!consolePane) return;
   consolePane.textContent += text + "\n";
   consolePane.scrollTop = consolePane.scrollHeight;
 }
@@ -525,7 +823,7 @@ function initMonacoEditor() {
     language: getLanguage(activeFileName),
     theme: currentTheme === 'dark' ? 'vs-dark' : 'vs',
     automaticLayout: true,
-    fontSize: 13,
+    fontSize: 14,
     minimap: { enabled: false },
     contextmenu: false
   });
@@ -550,32 +848,82 @@ async function loadClassesDropdown() {
   try {
     const res = await apiFetch('/api.php?action=get_classes');
     const data = await res.json();
-    if (data.success) {
-      const select = document.getElementById('classFilterSelect');
-      select.innerHTML = '<option value="ALL">Semua Rombel</option>';
-      data.classes.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c;
-        opt.textContent = `Rombel ${c}`;
-        select.appendChild(opt);
-      });
+    if (!res.ok || !data.success || !Array.isArray(data.classes)) {
+      throw new Error(data.message || 'Gagal memuat daftar rombel.');
     }
-  } catch(e) {}
+
+    const select = document.getElementById('classFilterSelect');
+    select.innerHTML = '<option value="ALL">Semua Rombel</option>';
+    data.classes.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = `Rombel ${c}`;
+      select.appendChild(opt);
+    });
+    select.disabled = false;
+    select.title = '';
+  } catch (error) {
+    console.error('Gagal memuat daftar rombel:', error);
+    const select = document.getElementById('classFilterSelect');
+    select.disabled = true;
+    select.title = 'Daftar rombel gagal dimuat. Periksa koneksi dan muat ulang halaman.';
+  }
 }
 
 window.debounceTeacherSearch = function() {
   clearTimeout(searchTimeout);
-  searchTimeout = setTimeout(fetchTeacherData, 300);
+  searchTimeout = setTimeout(() => fetchTeacherData({ showLoading: true }), 300);
 };
 
 function startTeacherMonitoring() {
-  fetchTeacherData();
+  fetchTeacherData({ showLoading: true });
   if (!teacherInterval) {
-    teacherInterval = setInterval(fetchTeacherData, 2000);
+    teacherInterval = setInterval(() => fetchTeacherData({ silent: true }), 2000);
   }
 }
 
-window.fetchTeacherData = async function() {
+function setTeacherDataStatus(state, message) {
+  const status = document.getElementById('teacherDataStatus');
+  if (!status) return;
+  status.classList.remove('teacher-status-error', 'teacher-status-ready');
+  if (state === 'loading') {
+    status.innerHTML = '<span class="loading-spinner loading-spinner-sm" aria-hidden="true"></span><span></span>';
+    status.lastElementChild.textContent = message;
+    return;
+  }
+  if (state === 'error') {
+    status.innerHTML = '<span class="status-indicator status-indicator-error" aria-hidden="true"></span><span></span>';
+    status.lastElementChild.textContent = message;
+    status.classList.add('teacher-status-error');
+    return;
+  }
+  status.innerHTML = '<span class="status-indicator status-indicator-ready" aria-hidden="true"></span><span></span>';
+  status.lastElementChild.textContent = message;
+  status.classList.add('teacher-status-ready');
+}
+
+function renderTeacherLoadingCards() {
+  const grid = document.getElementById('studentGrid');
+  grid.innerHTML = Array.from({ length: 3 }, () => `
+    <div class="student-skeleton rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4" aria-hidden="true">
+      <div class="skeleton-line w-2/3"></div>
+      <div class="skeleton-line mt-4 w-1/3"></div>
+      <div class="skeleton-block mt-3 h-24"></div>
+    </div>
+  `).join('');
+}
+
+window.fetchTeacherData = async function(options = {}) {
+  if (teacherFetchInFlight) return;
+  const { silent = false, showLoading = false } = options;
+  teacherFetchInFlight = true;
+  if (!teacherDataLoaded) {
+    renderTeacherLoadingCards();
+    setTeacherDataStatus('loading', 'Mengambil data dan file siswa...');
+  } else if (showLoading) {
+    setTeacherDataStatus('loading', 'Memperbarui data siswa...');
+  }
+
   try {
     const selectedClass = document.getElementById('classFilterSelect').value;
     const searchQuery = document.getElementById('searchStudentInput').value.trim();
@@ -583,7 +931,9 @@ window.fetchTeacherData = async function() {
     const url = `/api.php?action=get_all_students_data&class=${encodeURIComponent(selectedClass)}&search=${encodeURIComponent(searchQuery)}`;
     const res = await apiFetch(url);
     const data = await res.json();
-    if (!data.success) return;
+    if (!res.ok || !data.success || !Array.isArray(data.students)) {
+      throw new Error(data.message || 'Server tidak dapat memuat data siswa.');
+    }
 
     const grid = document.getElementById('studentGrid');
     grid.innerHTML = '';
@@ -598,51 +948,96 @@ window.fetchTeacherData = async function() {
     } else {
       data.students.forEach(s => {
         const card = document.createElement('div');
-        card.className = "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between shadow-lg hover:border-slate-400 dark:hover:border-slate-700 transition";
-        
-        let filePills = '';
-        (s.files || []).forEach(f => {
-          const isOpened = f === s.activeFile;
-          filePills += `<button onclick="inspectStudentFile('${s.nama}', '${s.nipd}', '${f}')" class="text-[10px] px-2 py-0.5 rounded border transition ${isOpened ? 'bg-blue-600/20 border-blue-500 text-blue-600 dark:text-blue-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}">${f}${isOpened ? ' (Sedang Dibuka)' : ''}</button> `;
-        });
+        card.className = "student-card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col justify-between shadow-lg hover:border-slate-400 dark:hover:border-slate-700 transition";
 
         card.innerHTML = `
           <div>
             <div class="flex items-center justify-between mb-2">
-              <span class="text-xs font-bold text-slate-900 dark:text-slate-200">${s.nama} (NIPD: ${s.nipd})</span>
-              <span class="text-[10px] bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded-md font-mono">${s.rombel}</span>
+              <span class="student-name text-sm font-bold text-slate-900 dark:text-slate-200">${escapeHtml(s.nama)} <span class="font-normal text-slate-500 dark:text-slate-400">(NIPD: ${escapeHtml(s.nipd)})</span></span>
+              <span class="student-class text-xs bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 px-2.5 py-1 rounded-lg font-mono">${escapeHtml(s.rombel)}</span>
             </div>
             
             <div class="mb-2">
-              <p class="text-[11px] text-slate-500 dark:text-slate-400 mb-1 flex items-center gap-1">
+              <p class="student-files-label text-xs text-slate-600 dark:text-slate-300 mb-1.5 flex items-center gap-1">
                 <i data-lucide="folder-open" class="w-3.5 h-3.5 text-blue-500"></i> File Siswa:
               </p>
-              <div class="flex flex-wrap gap-1">${filePills || '<span class="text-[10px] text-slate-400">Belum ada file</span>'}</div>
+              <div class="student-file-list flex flex-wrap gap-2"></div>
             </div>
 
-            <div class="bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800/80 font-mono text-[11px] text-slate-800 dark:text-slate-300 h-28 overflow-hidden select-text">
+            <div class="student-code-preview bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 font-mono text-xs text-slate-800 dark:text-slate-300 h-32 overflow-auto select-text">
               <pre>${escapeHtml(s.code)}</pre>
             </div>
           </div>
         `;
+        const fileList = card.querySelector('.student-file-list');
+        if (Array.isArray(s.files) && s.files.length > 0) {
+          s.files.forEach((fileName) => {
+            const isOpened = fileName === s.activeFile;
+            const fileButton = document.createElement('button');
+            fileButton.type = 'button';
+            fileButton.className = `student-file-chip text-[13px] px-3 py-1.5 rounded-lg border transition ${isOpened ? 'bg-blue-600/20 border-blue-500 text-blue-600 dark:text-blue-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`;
+            fileButton.textContent = `${fileName}${isOpened ? ' (Sedang Dibuka)' : ''}`;
+            fileButton.addEventListener('click', () => window.inspectStudentFile(s.nama, s.nipd, fileName));
+            fileList.appendChild(fileButton);
+          });
+        } else {
+          const emptyFiles = document.createElement('span');
+          emptyFiles.className = 'text-sm text-slate-500 dark:text-slate-400';
+          emptyFiles.textContent = 'Belum ada file';
+          fileList.appendChild(emptyFiles);
+        }
         grid.appendChild(card);
       });
     }
 
     document.getElementById('displayedStudentCount').textContent = data.filtered_count;
     document.getElementById('totalStudentCount').textContent = data.total;
+    teacherDataLoaded = true;
+    if (!silent || teacherDataHadError) {
+      const recoveryMessage = teacherDataHadError ? 'Koneksi pulih · ' : '';
+      setTeacherDataStatus('ready', `${recoveryMessage}Data diperbarui ${new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+    }
+    teacherDataHadError = false;
     refreshIcons();
-  } catch(e) {}
+  } catch (error) {
+    if (!silent) console.error('Gagal memuat data pemantauan siswa:', error);
+    teacherDataHadError = true;
+    if (!teacherDataLoaded) {
+      const grid = document.getElementById('studentGrid');
+      grid.innerHTML = '<div class="col-span-full rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">Data siswa belum dapat dimuat. Periksa koneksi lalu coba lagi.</div>';
+      setTeacherDataStatus('error', 'Gagal memuat data siswa');
+    } else {
+      setTeacherDataStatus('error', 'Gagal memperbarui data; menampilkan data sebelumnya');
+    }
+  } finally {
+    teacherFetchInFlight = false;
+  }
 };
 
 window.inspectStudentFile = async function(studentName, nipd, fileName) {
   document.getElementById('inspectStudentName').textContent = `Mengintip Kode: ${studentName}`;
   document.getElementById('inspectStudentInfo').textContent = `File: ${fileName} (NIPD: ${nipd})`;
   document.getElementById('inspectorModal').classList.remove('hidden');
+  inspectorFileName = fileName;
+  setInspectorRunStatus('Memuat kode siswa...');
+  document.getElementById('inspectorConsolePane').textContent = 'Hasil pengujian kode siswa akan tampil di sini.';
+  switchInspectorOutputTab('console');
 
-  const res = await apiFetch(`/api.php?action=get_student_file_content&nipd=${nipd}&filename=${fileName}`);
-  const data = await res.json();
-  const code = data.success ? data.code : '# Gagal memuat file';
+  let code;
+  try {
+    const query = new URLSearchParams({ action: 'get_student_file_content', nipd, filename: fileName });
+    const res = await apiFetch(`/api.php?${query}`);
+    const data = await res.json();
+    if (!res.ok || !data.success || typeof data.code !== 'string') {
+      throw new Error(data.message || 'Gagal memuat kode siswa.');
+    }
+    code = data.code;
+    setInspectorRunStatus('Kode siswa hanya dibaca; pengujian tidak mengubah file siswa.');
+  } catch (error) {
+    console.error('Gagal memuat kode siswa untuk inspeksi:', error);
+    code = '# Gagal memuat kode siswa.';
+    setInspectorRunStatus(error.message || 'Gagal memuat kode siswa.', true);
+  }
 
   if (!inspectorEditor) {
     inspectorEditor = monaco.editor.create(document.getElementById('inspectorEditorContainer'), {
@@ -651,16 +1046,151 @@ window.inspectStudentFile = async function(studentName, nipd, fileName) {
       theme: currentTheme === 'dark' ? 'vs-dark' : 'vs',
       readOnly: true,
       automaticLayout: true,
-      fontSize: 13
+      fontSize: 14
     });
   } else {
     inspectorEditor.setValue(code);
     monaco.editor.setModelLanguage(inspectorEditor.getModel(), getLanguage(fileName));
   }
+  updateInspectorRunButton();
+  requestAnimationFrame(() => inspectorEditor?.layout());
+};
+
+function updateInspectorRunButton() {
+  const button = document.getElementById('inspectorRunButton');
+  const label = button?.querySelector('[data-inspector-run-label]');
+  const language = getLanguage(inspectorFileName);
+  const labels = {
+    python: 'Jalankan Python',
+    javascript: 'Jalankan JavaScript',
+    html: 'Preview HTML',
+    css: 'Preview CSS'
+  };
+  if (label) label.textContent = labels[language] || 'Tidak didukung';
+  if (button) {
+    button.disabled = !labels[language];
+    button.title = labels[language] || 'Tipe file ini tidak mendukung preview atau runner.';
+  }
+}
+
+function setInspectorRunStatus(message, isError = false) {
+  const status = document.getElementById('inspectorRunStatus');
+  status.textContent = message;
+  status.classList.toggle('text-red-600', isError);
+  status.classList.toggle('dark:text-red-400', isError);
+  status.classList.toggle('text-slate-500', !isError);
+  status.classList.toggle('dark:text-slate-400', !isError);
+}
+
+window.switchInspectorOutputTab = function(tab) {
+  const showPreview = tab === 'preview';
+  document.getElementById('inspectorConsolePane').classList.toggle('hidden', showPreview);
+  document.getElementById('inspectorPreviewFrame').classList.toggle('hidden', !showPreview);
+  const activeClass = 'rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white';
+  const inactiveClass = 'rounded-md px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-800';
+  document.getElementById('inspectorConsoleTab').className = showPreview ? inactiveClass : activeClass;
+  document.getElementById('inspectorPreviewTab').className = showPreview ? activeClass : inactiveClass;
+};
+
+window.runInspectorCode = async function() {
+  if (!inspectorEditor) return;
+  const code = inspectorEditor.getValue();
+  const language = getLanguage(inspectorFileName);
+  const button = document.getElementById('inspectorRunButton');
+  const consolePane = document.getElementById('inspectorConsolePane');
+  const previewFrame = document.getElementById('inspectorPreviewFrame');
+
+  if (language === 'html') {
+    previewFrame.srcdoc = code;
+    window.switchInspectorOutputTab('preview');
+    setInspectorRunStatus('Preview HTML siswa ditampilkan dalam sandbox.');
+    return;
+  }
+  if (language === 'css') {
+    const safeCss = code.replace(/<\/style/gi, '<\\/style');
+    previewFrame.srcdoc = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:system-ui,sans-serif;padding:1.5rem;color:#334155}.preview-sample{padding:1rem;border:1px solid #cbd5e1;border-radius:.75rem}${safeCss}</style></head><body><h2>Preview CSS Siswa</h2><div class="preview-sample"><h3>Contoh elemen</h3><p>Area contoh untuk menguji style siswa.</p><button>Contoh tombol</button></div></body></html>`;
+    window.switchInspectorOutputTab('preview');
+    setInspectorRunStatus('Preview CSS ditampilkan dalam sandbox.');
+    return;
+  }
+
+  if (language === 'python') {
+    if (!pyodideInstance) {
+      setInspectorRunStatus('Runtime Python belum siap. Tunggu hingga status Python Ready.', true);
+      window.switchInspectorOutputTab('console');
+      return;
+    }
+    window.switchInspectorOutputTab('console');
+    consolePane.textContent = '--- Uji kode Python siswa ---\n';
+    setButtonLoading(button, true, 'Menjalankan...');
+    pythonOutputPaneId = 'inspectorConsolePane';
+    setInspectorRunStatus('Kode Python sedang dijalankan...');
+    try {
+      await pyodideInstance.runPythonAsync(code);
+      appendConsole('--- Selesai ---', 'inspectorConsolePane');
+      setInspectorRunStatus('Pengujian Python selesai. File siswa tidak diubah.');
+    } catch (error) {
+      appendConsole(`[Execution Error]: ${error.message}`, 'inspectorConsolePane');
+      setInspectorRunStatus('Pengujian selesai dengan error. Lihat Console.', true);
+    } finally {
+      pythonOutputPaneId = 'consolePane';
+      setButtonLoading(button, false);
+    }
+    return;
+  }
+
+  if (language === 'javascript') {
+    window.switchInspectorOutputTab('console');
+    consolePane.textContent = '--- Uji JavaScript siswa ---\n';
+    setButtonLoading(button, true, 'Menjalankan...');
+    setInspectorRunStatus('Kode JavaScript berjalan di sandbox...');
+    const token = crypto.randomUUID();
+    let finished = false;
+    let timeoutId;
+    const finish = (message, isError = false) => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('message', onMessage);
+      inspectorExecutionCleanup = null;
+      setButtonLoading(button, false);
+      setInspectorRunStatus(message, isError);
+    };
+    const onMessage = (event) => {
+      if (event.source !== previewFrame.contentWindow
+        || event.data?.type !== 'inspector-console'
+        || event.data?.token !== token
+        || !Array.isArray(event.data?.values)) return;
+      appendConsole(event.data.values.join(' '), 'inspectorConsolePane');
+      const output = event.data.values[0];
+      if (output === '--- Selesai ---') {
+        finish('JavaScript selesai dijalankan dalam sandbox.');
+      } else if (output === '[JS Error]') {
+        finish('Pengujian selesai dengan error. Lihat Console.', true);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    inspectorExecutionCleanup = () => finish('Pengujian JavaScript dihentikan.', true);
+    timeoutId = window.setTimeout(() => {
+      finish('Pengujian melebihi 30 detik. Hentikan dengan menutup dialog.', true);
+    }, 30000);
+    const safeCode = code.replace(/<\/script/gi, '<\\/script');
+    previewFrame.srcdoc = `<!doctype html><meta charset="utf-8"><script>
+      const token=${JSON.stringify(token)};
+      const send=(...values)=>parent.postMessage({type:'inspector-console',token,values:values.map(value=>String(value))},'*');
+      console.log=(...values)=>send(...values);
+      console.error=(...values)=>send('[Error]',...values);
+      try { Promise.resolve((async()=>{${safeCode}\n})()).then(()=>send('--- Selesai ---')).catch(error=>send('[JS Error]',error.message)); }
+      catch(error) { send('[JS Error]',error.message); }
+    <\/script>`;
+    setInspectorRunStatus('JavaScript berjalan dalam iframe sandbox dengan akses halaman induk dibatasi.');
+  }
 };
 
 window.closeInspector = function() {
+  inspectorExecutionCleanup?.();
   document.getElementById('inspectorModal').classList.add('hidden');
+  document.getElementById('inspectorPreviewFrame').srcdoc = '';
 };
 
 function escapeHtml(str) {

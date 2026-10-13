@@ -1,15 +1,54 @@
 <?php
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Cache-Control: no-store, private');
+
+$scriptDirectory = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
+$cookiePath = rtrim($scriptDirectory, '/') . '/';
+session_set_cookie_params([
+    'httponly' => true,
+    'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+    'samesite' => 'Lax',
+    'path' => $cookiePath ?: '/'
+]);
+session_start();
 
 $action = $_GET['action'] ?? '';
 $usersFile = __DIR__ . '/users.json';
 $dataDir = __DIR__ . '/data';
 
-function sanitize($str) {
-    return preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $str);
+function respond($payload, $status = 200) {
+    http_response_code($status);
+    echo json_encode($payload);
+    exit;
+}
+
+function requestData() {
+    $input = json_decode(file_get_contents('php://input'), true);
+    return is_array($input) ? $input : [];
+}
+
+function requireLogin($role = null) {
+    $user = $_SESSION['user'] ?? null;
+    if (!$user || !isset($user['role'], $user['id'])) {
+        respond(['success' => false, 'message' => 'Sesi login tidak valid atau telah berakhir. Silakan login kembali.'], 401);
+    }
+    if ($role !== null && $user['role'] !== $role) {
+        respond(['success' => false, 'message' => 'Akses ditolak.'], 403);
+    }
+    return $user;
+}
+
+function allowedFilename($filename) {
+    return is_string($filename)
+        && preg_match('/\A[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,98}\.(py|html|js|css)\z/i', $filename) === 1;
+}
+
+function sanitize($value) {
+    return preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$value);
+}
+
+function saveUsers($usersFile, $usersData) {
+    return file_put_contents($usersFile, json_encode($usersData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX) !== false;
 }
 
 function sanitize_folder($str) {
@@ -19,12 +58,18 @@ function sanitize_folder($str) {
 
 function createSecureFolder($dir) {
     if (!file_exists($dir)) {
-        mkdir($dir, 0777, true);
+        if (!mkdir($dir, 0750, true) && !is_dir($dir)) {
+            respond(['success' => false, 'message' => 'Gagal membuat folder penyimpanan.'], 500);
+        }
     }
     $indexFile = $dir . '/index.php';
     if (!file_exists($indexFile)) {
         file_put_contents($indexFile, '<?php http_response_code(403); exit("403 Forbidden - Access Denied"); ?>');
     }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'XMLHttpRequest') {
+    respond(['success' => false, 'message' => 'Permintaan tidak valid.'], 403);
 }
 
 createSecureFolder($dataDir);
@@ -59,27 +104,54 @@ function getUserFolder($role, $id, $dataDir, $usersFile) {
 }
 
 if ($action === 'login') {
-    $input = json_decode(file_get_contents('php://input'), true);
+    $input = requestData();
     $role = $input['role'] ?? '';
     
     if (!file_exists($usersFile)) {
-        echo json_encode(['success' => false, 'message' => 'File users.json tidak ditemukan!']);
-        exit;
+        respond(['success' => false, 'message' => 'File users.json tidak ditemukan!'], 500);
     }
     
     $usersData = json_decode(file_get_contents($usersFile), true);
+    if (!is_array($usersData)) {
+        respond(['success' => false, 'message' => 'File users.json tidak valid.'], 500);
+    }
+    if (!isset($usersData['siswa']) || !is_array($usersData['siswa'])) {
+        $usersData['siswa'] = [];
+    }
+    if (!isset($usersData['guru']) || !is_array($usersData['guru'])) {
+        $usersData['guru'] = [];
+    }
+
+    $verifyPassword = function (&$record, $password) use ($usersFile, &$usersData) {
+        $storedPassword = (string)($record['password'] ?? '');
+        $isHashed = str_starts_with($storedPassword, '$2y$')
+            || str_starts_with($storedPassword, '$argon2i$')
+            || str_starts_with($storedPassword, '$argon2id$');
+        $valid = $isHashed
+            ? password_verify($password, $storedPassword)
+            : hash_equals($storedPassword, $password);
+
+        if ($valid && !$isHashed) {
+            $record['password'] = password_hash($password, PASSWORD_DEFAULT);
+            if (!saveUsers($usersFile, $usersData)) {
+                respond(['success' => false, 'message' => 'Gagal memperbarui penyimpanan password.'], 500);
+            }
+        }
+        return $valid;
+    };
 
     if ($role === 'siswa') {
-        $nipd = trim($input['nipd'] ?? '');
-        $password = trim($input['password'] ?? '');
+        $nipd = trim((string)($input['nipd'] ?? ''));
+        $password = (string)($input['password'] ?? '');
         $found = null;
 
-        foreach ($usersData['siswa'] as $s) {
-            if ($s['nipd'] === $nipd && $s['password'] === $password) {
+        foreach ($usersData['siswa'] as &$s) {
+            if (($s['nipd'] ?? '') === $nipd && $verifyPassword($s, $password)) {
                 $found = $s;
                 break;
             }
         }
+        unset($s);
         
         if ($found) {
             $studentFolder = getUserFolder('siswa', $found['nipd'], $dataDir, $usersFile);
@@ -89,21 +161,24 @@ if ($action === 'login') {
             }
 
             unset($found['password']);
-            echo json_encode(['success' => true, 'user' => $found]);
+            session_regenerate_id(true);
+            $_SESSION['user'] = ['role' => 'siswa', 'id' => $found['nipd'], 'profile' => $found];
+            respond(['success' => true, 'user' => $found]);
         } else {
-            echo json_encode(['success' => false, 'message' => 'NIPD atau Password Siswa salah!']);
+            respond(['success' => false, 'message' => 'NIPD atau Password Siswa salah!'], 401);
         }
     } elseif ($role === 'guru') {
-        $username = trim($input['username'] ?? '');
-        $password = trim($input['password'] ?? '');
+        $username = trim((string)($input['username'] ?? ''));
+        $password = (string)($input['password'] ?? '');
         $found = null;
 
-        foreach ($usersData['guru'] as $g) {
-            if ($g['username'] === $username && $g['password'] === $password) {
+        foreach ($usersData['guru'] as &$g) {
+            if (($g['username'] ?? '') === $username && $verifyPassword($g, $password)) {
                 $found = $g;
                 break;
             }
         }
+        unset($g);
 
         if ($found) {
             $guruFolder = getUserFolder('guru', $found['username'], $dataDir, $usersFile);
@@ -113,15 +188,38 @@ if ($action === 'login') {
             }
 
             unset($found['password']);
-            echo json_encode(['success' => true, 'user' => $found]);
+            session_regenerate_id(true);
+            $_SESSION['user'] = ['role' => 'guru', 'id' => $found['username'], 'profile' => $found];
+            respond(['success' => true, 'user' => $found]);
         } else {
-            echo json_encode(['success' => false, 'message' => 'Username atau Password Guru salah!']);
+            respond(['success' => false, 'message' => 'Username atau Password Guru salah!'], 401);
         }
+    } else {
+        respond(['success' => false, 'message' => 'Role tidak valid.'], 400);
     }
-    exit;
+}
+
+if ($action === 'session') {
+    $user = $_SESSION['user'] ?? null;
+    if (!$user || !isset($user['role'], $user['id'], $user['profile'])) {
+        respond(['success' => false, 'message' => 'Belum login.'], 401);
+    }
+    respond(['success' => true, 'user' => $user['profile'], 'role' => $user['role']]);
+}
+
+if ($action === 'logout') {
+    requireLogin();
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+    }
+    session_destroy();
+    respond(['success' => true]);
 }
 
 if ($action === 'get_classes') {
+    requireLogin('guru');
     $usersData = json_decode(file_get_contents($usersFile), true)['siswa'] ?? [];
     $classes = [];
     foreach ($usersData as $s) {
@@ -131,20 +229,143 @@ if ($action === 'get_classes') {
         }
     }
     sort($classes);
-    echo json_encode(['success' => true, 'classes' => $classes]);
-    exit;
+    respond(['success' => true, 'classes' => $classes]);
+}
+
+if ($action === 'get_accounts') {
+    requireLogin('guru');
+    if (!file_exists($usersFile)) {
+        respond(['success' => false, 'message' => 'File users.json tidak ditemukan.'], 500);
+    }
+    $usersData = json_decode(file_get_contents($usersFile), true);
+    if (!is_array($usersData) || !isset($usersData['siswa'], $usersData['guru'])
+        || !is_array($usersData['siswa']) || !is_array($usersData['guru'])) {
+        respond(['success' => false, 'message' => 'Struktur users.json tidak valid.'], 500);
+    }
+
+    $accounts = [];
+    foreach ($usersData['siswa'] as $student) {
+        $accounts[] = [
+            'role' => 'siswa',
+            'identifier' => (string)($student['nipd'] ?? ''),
+            'name' => (string)($student['nama'] ?? ''),
+            'class' => (string)($student['rombel_saat_ini'] ?? '')
+        ];
+    }
+    foreach ($usersData['guru'] as $teacher) {
+        $accounts[] = [
+            'role' => 'guru',
+            'identifier' => (string)($teacher['username'] ?? ''),
+            'name' => (string)($teacher['name'] ?? ''),
+            'class' => ''
+        ];
+    }
+    respond(['success' => true, 'accounts' => $accounts]);
+}
+
+if ($action === 'create_account') {
+    requireLogin('guru');
+    $input = requestData();
+    $role = (string)($input['role'] ?? '');
+    $identifier = trim((string)($input['identifier'] ?? ''));
+    $name = trim((string)($input['name'] ?? ''));
+    $password = trim((string)($input['password'] ?? ''));
+
+    if (!in_array($role, ['siswa', 'guru'], true)
+        || preg_match('/\A[a-zA-Z0-9_-]{1,64}\z/', $identifier) !== 1
+        || $name === '' || strlen($name) > 120
+        || strlen($password) < 8 || strlen($password) > 128) {
+        respond(['success' => false, 'message' => 'Data akun tidak valid. Pastikan ID, nama, dan password (minimal 8 karakter) benar.'], 400);
+    }
+
+    if (!file_exists($usersFile)) {
+        respond(['success' => false, 'message' => 'File users.json tidak ditemukan.'], 500);
+    }
+    $usersData = json_decode(file_get_contents($usersFile), true);
+    if (!is_array($usersData) || !isset($usersData['siswa'], $usersData['guru'])
+        || !is_array($usersData['siswa']) || !is_array($usersData['guru'])) {
+        respond(['success' => false, 'message' => 'Struktur users.json tidak valid.'], 500);
+    }
+
+    $collection = $role === 'siswa' ? 'siswa' : 'guru';
+    $idField = $role === 'siswa' ? 'nipd' : 'username';
+    foreach ($usersData[$collection] as $account) {
+        if ((string)($account[$idField] ?? '') === $identifier) {
+            respond(['success' => false, 'message' => 'ID akun sudah digunakan.'], 409);
+        }
+    }
+
+    $record = [
+        $idField => $identifier,
+        ($role === 'siswa' ? 'nama' : 'name') => $name,
+        'password' => password_hash($password, PASSWORD_DEFAULT)
+    ];
+    if ($role === 'siswa') {
+        $rombel = trim((string)($input['rombel'] ?? ''));
+        $gender = (string)($input['gender'] ?? '');
+        if ($rombel === '' || strlen($rombel) > 80 || !in_array($gender, ['L', 'P'], true)) {
+            respond(['success' => false, 'message' => 'Rombel dan jenis kelamin siswa wajib diisi.'], 400);
+        }
+        $record['jk'] = $gender;
+        $record['rombel_saat_ini'] = $rombel;
+    }
+
+    $usersData[$collection][] = $record;
+    if (!saveUsers($usersFile, $usersData)) {
+        respond(['success' => false, 'message' => 'Gagal menyimpan akun baru.'], 500);
+    }
+    respond(['success' => true, 'message' => 'Akun berhasil ditambahkan.']);
+}
+
+if ($action === 'reset_account_password') {
+    $actingUser = requireLogin('guru');
+    $input = requestData();
+    $role = (string)($input['role'] ?? '');
+    $identifier = trim((string)($input['identifier'] ?? ''));
+    $password = trim((string)($input['password'] ?? ''));
+    if (!in_array($role, ['siswa', 'guru'], true)
+        || preg_match('/\A[a-zA-Z0-9_-]{1,64}\z/', $identifier) !== 1
+        || strlen($password) < 8 || strlen($password) > 128) {
+        respond(['success' => false, 'message' => 'ID atau password tidak valid. Password minimal 8 karakter.'], 400);
+    }
+    if ($role === 'guru' && $identifier === $actingUser['id']) {
+        respond(['success' => false, 'message' => 'Gunakan menu Password untuk mengganti password akun sendiri.'], 400);
+    }
+    if (!file_exists($usersFile)) {
+        respond(['success' => false, 'message' => 'File users.json tidak ditemukan.'], 500);
+    }
+    $usersData = json_decode(file_get_contents($usersFile), true);
+    if (!is_array($usersData) || !isset($usersData['siswa'], $usersData['guru'])
+        || !is_array($usersData['siswa']) || !is_array($usersData['guru'])) {
+        respond(['success' => false, 'message' => 'Struktur users.json tidak valid.'], 500);
+    }
+
+    $collection = $role === 'siswa' ? 'siswa' : 'guru';
+    $idField = $role === 'siswa' ? 'nipd' : 'username';
+    foreach ($usersData[$collection] as &$account) {
+        if ((string)($account[$idField] ?? '') === $identifier) {
+            $account['password'] = password_hash($password, PASSWORD_DEFAULT);
+            unset($account);
+            if (!saveUsers($usersFile, $usersData)) {
+                respond(['success' => false, 'message' => 'Gagal menyimpan password baru.'], 500);
+            }
+            respond(['success' => true, 'message' => 'Password akun berhasil direset.']);
+        }
+    }
+    unset($account);
+    respond(['success' => false, 'message' => 'Akun tidak ditemukan.'], 404);
 }
 
 if ($action === 'change_password') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    $role = $input['role'] ?? '';
-    $id = trim($input['id'] ?? '');
-    $oldPassword = trim($input['old_password'] ?? '');
-    $newPassword = trim($input['new_password'] ?? '');
+    $user = requireLogin();
+    $input = requestData();
+    $role = $user['role'];
+    $id = $user['id'];
+    $oldPassword = (string)($input['old_password'] ?? '');
+    $newPassword = (string)($input['new_password'] ?? '');
 
     if (empty($newPassword)) {
-        echo json_encode(['success' => false, 'message' => 'Password baru tidak boleh kosong!']);
-        exit;
+        respond(['success' => false, 'message' => 'Password baru tidak boleh kosong!'], 400);
     }
 
     $usersData = json_decode(file_get_contents($usersFile), true);
@@ -153,11 +374,10 @@ if ($action === 'change_password') {
     if ($role === 'siswa') {
         foreach ($usersData['siswa'] as &$s) {
             if ($s['nipd'] === $id) {
-                if ($s['password'] !== $oldPassword) {
-                    echo json_encode(['success' => false, 'message' => 'Password lama tidak cocok!']);
-                    exit;
+                if (!password_verify($oldPassword, $s['password']) && !hash_equals($s['password'], $oldPassword)) {
+                    respond(['success' => false, 'message' => 'Password lama tidak cocok!'], 400);
                 }
-                $s['password'] = $newPassword;
+                $s['password'] = password_hash($newPassword, PASSWORD_DEFAULT);
                 $updated = true;
                 break;
             }
@@ -165,11 +385,10 @@ if ($action === 'change_password') {
     } elseif ($role === 'guru') {
         foreach ($usersData['guru'] as &$g) {
             if ($g['username'] === $id) {
-                if ($g['password'] !== $oldPassword) {
-                    echo json_encode(['success' => false, 'message' => 'Password lama tidak cocok!']);
-                    exit;
+                if (!password_verify($oldPassword, $g['password']) && !hash_equals($g['password'], $oldPassword)) {
+                    respond(['success' => false, 'message' => 'Password lama tidak cocok!'], 400);
                 }
-                $g['password'] = $newPassword;
+                $g['password'] = password_hash($newPassword, PASSWORD_DEFAULT);
                 $updated = true;
                 break;
             }
@@ -177,31 +396,42 @@ if ($action === 'change_password') {
     }
 
     if ($updated) {
-        file_put_contents($usersFile, json_encode($usersData, JSON_PRETTY_PRINT));
-        echo json_encode(['success' => true, 'message' => 'Password berhasil diubah!']);
+        if (!saveUsers($usersFile, $usersData)) {
+            respond(['success' => false, 'message' => 'Gagal menyimpan password baru.'], 500);
+        }
+        session_destroy();
+        respond(['success' => true, 'message' => 'Password berhasil diubah! Silakan login kembali.']);
     } else {
-        echo json_encode(['success' => false, 'message' => 'Pengguna tidak ditemukan!']);
+        respond(['success' => false, 'message' => 'Pengguna tidak ditemukan!'], 404);
     }
-    exit;
 }
 
 if ($action === 'set_active_file') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    $role = $input['role'] ?? 'siswa';
-    $id = $input['id'] ?? '';
-    $filename = sanitize($input['filename'] ?? 'main.py');
+    $user = requireLogin();
+    $input = requestData();
+    $role = $user['role'];
+    $id = $user['id'];
+    $filename = $input['filename'] ?? 'main.py';
+    if (!allowedFilename($filename)) {
+        respond(['success' => false, 'message' => 'Nama atau tipe file tidak diizinkan.'], 400);
+    }
 
     $folder = getUserFolder($role, $id, $dataDir, $usersFile);
     if (file_exists($folder)) {
-        file_put_contents($folder . '/status.json', json_encode(['active_file' => $filename]));
+        if (!file_exists($folder . '/' . $filename)) {
+            respond(['success' => false, 'message' => 'File tidak ditemukan.'], 404);
+        }
+        if (file_put_contents($folder . '/status.json', json_encode(['active_file' => $filename]), LOCK_EX) === false) {
+            respond(['success' => false, 'message' => 'Gagal menyimpan file aktif.'], 500);
+        }
     }
-    echo json_encode(['success' => true]);
-    exit;
+    respond(['success' => true]);
 }
 
 if ($action === 'get_files') {
-    $role = $_GET['role'] ?? 'siswa';
-    $id = $_GET['id'] ?? '';
+    $user = requireLogin();
+    $role = $user['role'];
+    $id = $user['id'];
     $folder = getUserFolder($role, $id, $dataDir, $usersFile);
     $files = [];
     $activeFile = 'main.py';
@@ -212,7 +442,7 @@ if ($action === 'get_files') {
 
         foreach ($scanned as $f) {
             $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
-            if ($f !== '.' && $f !== '..' && $f !== 'index.php' && in_array($ext, $allowedExts)) {
+            if (allowedFilename($f) && in_array($ext, $allowedExts, true)) {
                 $files[$f] = file_get_contents($folder . '/' . $f);
             }
         }
@@ -225,41 +455,54 @@ if ($action === 'get_files') {
         }
     }
 
-    echo json_encode(['success' => true, 'files' => $files, 'active_file' => $activeFile]);
-    exit;
+    respond(['success' => true, 'files' => $files, 'active_file' => $activeFile]);
 }
 
 if ($action === 'save_file') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    $role = $input['role'] ?? 'siswa';
-    $id = $input['id'] ?? '';
-    $filename = sanitize($input['filename'] ?? 'main.py');
+    $user = requireLogin();
+    $input = requestData();
+    $role = $user['role'];
+    $id = $user['id'];
+    $filename = $input['filename'] ?? 'main.py';
     $content = $input['content'] ?? '';
+    if (!allowedFilename($filename) || !is_string($content)) {
+        respond(['success' => false, 'message' => 'Nama file atau isi file tidak valid.'], 400);
+    }
+    if (strlen($content) > 1048576) {
+        respond(['success' => false, 'message' => 'Ukuran file maksimum adalah 1 MB.'], 413);
+    }
 
     $folder = getUserFolder($role, $id, $dataDir, $usersFile);
-    file_put_contents($folder . '/' . $filename, $content);
-    file_put_contents($folder . '/status.json', json_encode(['active_file' => $filename]));
+    if (file_put_contents($folder . '/' . $filename, $content, LOCK_EX) === false
+        || file_put_contents($folder . '/status.json', json_encode(['active_file' => $filename]), LOCK_EX) === false) {
+        respond(['success' => false, 'message' => 'Gagal menyimpan file.'], 500);
+    }
     
-    echo json_encode(['success' => true]);
-    exit;
+    respond(['success' => true]);
 }
 
 if ($action === 'delete_file') {
-    $input = json_decode(file_get_contents('php://input'), true);
-    $role = $input['role'] ?? 'siswa';
-    $id = $input['id'] ?? '';
-    $filename = sanitize($input['filename'] ?? '');
+    $user = requireLogin();
+    $input = requestData();
+    $role = $user['role'];
+    $id = $user['id'];
+    $filename = $input['filename'] ?? '';
+    if (!allowedFilename($filename)) {
+        respond(['success' => false, 'message' => 'Nama atau tipe file tidak diizinkan.'], 400);
+    }
 
     $folder = getUserFolder($role, $id, $dataDir, $usersFile);
     $filePath = $folder . '/' . $filename;
     if (file_exists($filePath)) {
-        unlink($filePath);
+        if (!unlink($filePath)) {
+            respond(['success' => false, 'message' => 'Gagal menghapus file.'], 500);
+        }
     }
-    echo json_encode(['success' => true]);
-    exit;
+    respond(['success' => true]);
 }
 
 if ($action === 'get_all_students_data') {
+    requireLogin('guru');
     $usersData = json_decode(file_get_contents($usersFile), true)['siswa'] ?? [];
     $filterClass = trim($_GET['class'] ?? '');
     $searchQuery = strtolower(trim($_GET['search'] ?? ''));
@@ -302,7 +545,7 @@ if ($action === 'get_all_students_data') {
 
             foreach ($scanned as $f) {
                 $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
-                if ($f !== '.' && $f !== '..' && $f !== 'index.php' && in_array($ext, $allowedExts)) {
+                if (allowedFilename($f) && in_array($ext, $allowedExts, true)) {
                     $fileList[] = $f;
                 }
             }
@@ -325,27 +568,29 @@ if ($action === 'get_all_students_data') {
         ];
     }
 
-    echo json_encode([
+    respond([
         'success' => true,
         'total' => $totalStudents,
         'filtered_count' => count($result),
         'students' => $result
     ]);
-    exit;
 }
 
 if ($action === 'get_student_file_content') {
+    requireLogin('guru');
     $nipd = $_GET['nipd'] ?? '';
-    $filename = sanitize($_GET['filename'] ?? '');
+    $filename = $_GET['filename'] ?? '';
+    if (!allowedFilename($filename)) {
+        respond(['success' => false, 'message' => 'Nama atau tipe file tidak diizinkan.'], 400);
+    }
 
     $studentFolder = getUserFolder('siswa', $nipd, $dataDir, $usersFile);
     $filePath = $studentFolder . '/' . $filename;
     if (file_exists($filePath)) {
-        echo json_encode(['success' => true, 'code' => file_get_contents($filePath)]);
+        respond(['success' => true, 'code' => file_get_contents($filePath)]);
     } else {
-        echo json_encode(['success' => false, 'message' => 'File tidak ditemukan']);
+        respond(['success' => false, 'message' => 'File tidak ditemukan'], 404);
     }
-    exit;
 }
 
-echo json_encode(['success' => false, 'message' => 'Aksi tidak valid']);
+respond(['success' => false, 'message' => 'Aksi tidak valid'], 404);

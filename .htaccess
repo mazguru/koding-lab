@@ -2,3 +2,17 @@ Options -Indexes
 
 AddType application/javascript .mjs
 AddType application/wasm .wasm
+
+<FilesMatch "\.mjs$">
+  ForceType application/javascript
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.mjs$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
+<FilesMatch "^(users\.json|\.env.*)$">
+  Require all denied
+</FilesMatch>
