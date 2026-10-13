@@ -11,7 +11,7 @@ self.MonacoEnvironment = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
-const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'PythonLive Studio';
+const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'Koding LAB SMKN 1 Temon';
 
 // Otomatisasi URL Pyodide: CDN pada Dev mode, lokal folder pada Production build
 const PYODIDE_INDEX_URL = import.meta.env.DEV
@@ -514,7 +514,7 @@ function initMonacoEditor() {
   if (!container) return;
 
   editor = monaco.editor.create(container, {
-    value: files[activeFileName] || '# Selamat Datang di PythonLive Studio\nprint("Halo World")',
+    value: files[activeFileName] || '# Selamat Datang di Koding LAB SMKN 1 Temon\nprint("Halo World")',
     language: getLanguage(activeFileName),
     theme: currentTheme === 'dark' ? 'vs-dark' : 'vs',
     automaticLayout: true,

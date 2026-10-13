@@ -1,4 +1,4 @@
-# PythonLive Studio
+# Koding LAB SMKN 1 Temon
 
 Aplikasi belajar coding multi-bahasa berbasis Vite, Monaco Editor, dan Pyodide, dengan API PHP untuk akun serta penyimpanan file.
 Antarmuka menyesuaikan desktop, tablet, dan ponsel; di layar kecil daftar file dan navigasi guru ditampilkan dalam baris yang dapat digeser.

@@ -19,7 +19,7 @@ self.MonacoEnvironment = {
 };
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.BASE_URL).replace(/\/$/, '');
-const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'PythonLive Studio';
+const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'Koding LAB SMKN 1 Temon';
 
 const PYODIDE_INDEX_URL = import.meta.env.DEV
   ? '/node_modules/pyodide/'
@@ -48,11 +48,13 @@ let searchTimeout = null;
 let teacherDataLoaded = false;
 let teacherFetchInFlight = false;
 let teacherDataHadError = false;
+let accountRecords = [];
 let currentTheme = localStorage.getItem('py_theme') || 'dark';
 
 window.addEventListener('DOMContentLoaded', async () => {
   const appTitleHeader = document.getElementById('appTitleHeader');
   const appNavTitle = document.getElementById('appNavTitle');
+  document.title = APP_TITLE;
   if (appTitleHeader) appTitleHeader.textContent = APP_TITLE;
   if (appNavTitle) appNavTitle.textContent = APP_TITLE;
 
@@ -346,6 +348,7 @@ function setupAccountManagement() {
   roleSelect.addEventListener('change', updateNewAccountFields);
   document.getElementById('createAccountForm').addEventListener('submit', createAccount);
   document.getElementById('resetAccountPasswordForm').addEventListener('submit', resetAccountPassword);
+  document.getElementById('accountSearchInput').addEventListener('input', renderAccountList);
   updateNewAccountFields();
 }
 
@@ -373,45 +376,9 @@ window.loadAccounts = async function() {
   try {
     const response = await apiFetch('/api.php?action=get_accounts');
     const data = await response.json();
-    if (!response.ok || !data.success) throw new Error(data.message || 'Gagal memuat akun.');
-
-    count.textContent = `${data.accounts.length} akun`;
-    container.replaceChildren();
-    if (data.accounts.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'py-8 text-center text-sm text-slate-500 dark:text-slate-400';
-      empty.textContent = 'Belum ada akun.';
-      container.appendChild(empty);
-      return;
-    }
-
-    data.accounts.forEach((account) => {
-      const row = document.createElement('div');
-      row.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-4';
-
-      const details = document.createElement('div');
-      details.className = 'min-w-0';
-      const title = document.createElement('p');
-      title.className = 'truncate text-sm font-semibold text-slate-900 dark:text-white';
-      title.textContent = account.name || '(Nama belum diatur)';
-      const subtitle = document.createElement('p');
-      subtitle.className = 'mt-0.5 text-xs text-slate-500 dark:text-slate-400';
-      const roleLabel = account.role === 'siswa' ? `Siswa · NIPD ${account.identifier}` : `Guru · ${account.identifier}`;
-      subtitle.textContent = account.class ? `${roleLabel} · ${account.class}` : roleLabel;
-      details.append(title, subtitle);
-
-      const resetButton = document.createElement('button');
-      resetButton.type = 'button';
-      resetButton.className = 'shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-300';
-      resetButton.textContent = account.role === 'guru' && account.identifier === currentUser.username
-        ? 'Akun Anda'
-        : 'Reset password';
-      resetButton.disabled = account.role === 'guru' && account.identifier === currentUser.username;
-      resetButton.title = resetButton.disabled ? 'Gunakan menu Password untuk mengganti password sendiri.' : '';
-      resetButton.addEventListener('click', () => openResetAccountPassword(account));
-      row.append(details, resetButton);
-      container.appendChild(row);
-    });
+    if (!response.ok || !data.success || !Array.isArray(data.accounts)) throw new Error(data.message || 'Gagal memuat akun.');
+    accountRecords = data.accounts;
+    renderAccountList();
   } catch (error) {
     console.error('Gagal memuat daftar akun:', error);
     count.textContent = 'Daftar akun gagal dimuat';
@@ -422,6 +389,63 @@ window.loadAccounts = async function() {
     container.appendChild(message);
   }
 };
+
+function renderAccountList() {
+  const container = document.getElementById('accountList');
+  const count = document.getElementById('accountCount');
+  const query = document.getElementById('accountSearchInput').value.trim().toLowerCase();
+  const filteredAccounts = accountRecords.filter((account) => {
+    const searchableText = [
+      account.name,
+      account.identifier,
+      account.class,
+      account.role === 'siswa' ? 'siswa' : 'guru pengajar'
+    ].join(' ').toLowerCase();
+    return searchableText.includes(query);
+  });
+
+  count.textContent = query
+    ? `Menampilkan ${filteredAccounts.length} dari ${accountRecords.length} akun`
+    : `${accountRecords.length} akun`;
+  container.replaceChildren();
+  if (filteredAccounts.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'py-8 text-center text-sm text-slate-500 dark:text-slate-400';
+    empty.textContent = accountRecords.length === 0
+      ? 'Belum ada akun.'
+      : 'Akun yang cocok tidak ditemukan.';
+    container.appendChild(empty);
+    return;
+  }
+
+  filteredAccounts.forEach((account) => {
+    const row = document.createElement('div');
+    row.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-4';
+
+    const details = document.createElement('div');
+    details.className = 'min-w-0';
+    const title = document.createElement('p');
+    title.className = 'truncate text-sm font-semibold text-slate-900 dark:text-white';
+    title.textContent = account.name || '(Nama belum diatur)';
+    const subtitle = document.createElement('p');
+    subtitle.className = 'mt-0.5 text-xs text-slate-500 dark:text-slate-400';
+    const roleLabel = account.role === 'siswa' ? `Siswa · NIPD ${account.identifier}` : `Guru · ${account.identifier}`;
+    subtitle.textContent = account.class ? `${roleLabel} · ${account.class}` : roleLabel;
+    details.append(title, subtitle);
+
+    const resetButton = document.createElement('button');
+    resetButton.type = 'button';
+    resetButton.className = 'shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-300';
+    resetButton.textContent = account.role === 'guru' && account.identifier === currentUser.username
+      ? 'Akun Anda'
+      : 'Reset password';
+    resetButton.disabled = account.role === 'guru' && account.identifier === currentUser.username;
+    resetButton.title = resetButton.disabled ? 'Gunakan menu Password untuk mengganti password sendiri.' : '';
+    resetButton.addEventListener('click', () => openResetAccountPassword(account));
+    row.append(details, resetButton);
+    container.appendChild(row);
+  });
+}
 
 async function createAccount(event) {
   event.preventDefault();
@@ -819,7 +843,7 @@ function initMonacoEditor() {
   if (!container) return;
 
   editor = monaco.editor.create(container, {
-    value: files[activeFileName] || '# Selamat Datang di PythonLive Studio\nprint("Halo World")',
+    value: files[activeFileName] || '# Selamat Datang di Koding LAB SMKN 1 Temon\nprint("Halo World")',
     language: getLanguage(activeFileName),
     theme: currentTheme === 'dark' ? 'vs-dark' : 'vs',
     automaticLayout: true,
