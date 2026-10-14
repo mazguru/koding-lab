@@ -2,10 +2,11 @@
 
 Aplikasi belajar coding multi-bahasa berbasis Vite, Monaco Editor, dan Pyodide, dengan API PHP untuk akun serta penyimpanan file.
 Antarmuka menyesuaikan desktop, tablet, dan ponsel; di layar kecil daftar file dan navigasi guru ditampilkan dalam baris yang dapat digeser.
-Lab Guru memakai workspace kode yang sama: Python dan JavaScript dapat dijalankan, HTML dan CSS dapat dipratinjau langsung. Status runtime Python dan pemuatan data siswa ditampilkan di area kerja/dashboard.
+Lab Guru memakai workspace kode yang sama: Python dan JavaScript dapat dijalankan, HTML dan CSS dapat dipratinjau langsung. File JSON dan TXT dapat dibuat serta diedit; file JSON memakai syntax highlighting dan TXT memakai editor teks biasa. Status runtime Python dan pemuatan data siswa ditampilkan di area kerja/dashboard.
 Saat guru mengintip file siswa, kode tampil hanya-baca tetapi dapat diuji dari dialog yang sama. Hasil Python/JavaScript masuk ke Console; HTML/CSS dirender di tab Preview yang disandbox, tanpa menyimpan perubahan ke file siswa.
+Guru dapat membagikan file workspace ke satu atau beberapa siswa tertentu. Setiap siswa menerima salinan terpisah di workspace mereka dan dapat mengeditnya tanpa mengubah file guru.
 Fungsi `input()` Python berjalan melalui kolom input di panel Console pada browser yang mendukung isolasi lintas-origin. Input dapat diminta berulang kali dalam satu program, seperti pada permainan tebak angka. Server Laragon dan Vite development sudah mengirim header isolasi yang diperlukan; pada browser atau hosting yang tidak mengaktifkannya, aplikasi tetap berjalan memakai dialog input bawaan browser.
-Impor modul Python yang tersedia pada distribusi Pyodide dimuat otomatis saat pertama dipakai. `npm install` mengunduh seluruh 357 paket dan komponen dari CDN resmi Pyodide ke cache lokal dan memverifikasi setiap berkas dengan SHA-256 lockfile. Unduhan awal sekitar 310 MiB; sesudah instalasi dan build selesai, impor paket distribusi Pyodide (termasuk SymPy, NumPy, dan Matplotlib) dapat digunakan offline. Pustaka PyPI di luar distribusi Pyodide tidak termasuk. Grafik Matplotlib ditampilkan di bawah output program; `matplotlib.pyplot` menggunakan backend Agg agar dapat dirender dalam browser.
+Impor modul Python yang tersedia pada distribusi Pyodide dimuat otomatis saat pertama dipakai. `npm install` mengunduh 357 paket dan komponen Pyodide dari CDN resminya serta wheel Seaborn dari PyPI ke cache lokal, lalu memverifikasi SHA-256 file paket. Unduhan awal sekitar 310 MiB; sesudah instalasi dan build selesai, impor paket distribusi Pyodide (termasuk SymPy, NumPy, dan Matplotlib) serta Seaborn dapat digunakan tanpa koneksi internet. Pustaka PyPI lain di luar distribusi Pyodide tidak termasuk. Grafik Matplotlib ditampilkan di bawah output program; `matplotlib.pyplot` menggunakan backend Agg agar dapat dirender dalam browser.
 
 ## Persyaratan
 
@@ -47,7 +48,7 @@ Setiap build membersihkan hanya folder output terkelola `assets/` dan `pyodide/`
 
 ## Konfigurasi dan data lokal
 
-- `api.php` menangani login, pengelolaan kata sandi, file siswa/guru, dan data pemantauan.
+- `api.php` menangani login, pengelolaan kata sandi, file siswa/guru, berbagi salinan file guru, dan data pemantauan.
 - Data file disimpan di `data/`; folder ini tidak dimasukkan ke Git.
 - API menggunakan sesi PHP `HttpOnly`/`SameSite`, memeriksa role di server, dan mengikat operasi file ke akun pada sesi. Semua permintaan perubahan harus menyertakan header aplikasi.
 - Guru dapat membuka **Kelola Akun** untuk membuat akun siswa/guru dan mereset password akun lain. Password baru minimal 8 karakter dan disimpan sebagai hash; berikan password awal/reset kepada pemilik akun secara langsung. Guru mengganti password akunnya sendiri dari menu **Password**.

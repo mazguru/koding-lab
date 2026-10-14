@@ -1,9 +1,11 @@
 import { loadPyodide } from 'pyodide';
+import { loadPythonPackages } from './python-packages.js';
 
 let pyodide;
 let inputState;
 let inputBytes;
 let activeRunId = null;
+let packageBaseUrl;
 
 function readPythonInput(prompt) {
   Atomics.store(inputState, 0, 0);
@@ -24,6 +26,7 @@ self.onmessage = async ({ data }) => {
     try {
       inputState = new Int32Array(data.inputBuffer, 0, 2);
       inputBytes = new Uint8Array(data.inputBuffer, 8);
+      packageBaseUrl = data.packageBaseUrl;
       self.readPythonInput = readPythonInput;
       pyodide = await loadPyodide({
         indexURL: data.indexURL,
@@ -51,7 +54,7 @@ builtins.input = custom_input
     activeRunId = data.runId;
     try {
       self.postMessage({ type: 'loading-packages', runId: activeRunId });
-      await pyodide.loadPackagesFromImports(data.code);
+      await loadPythonPackages(pyodide, data.code, packageBaseUrl);
       if (data.code.includes('matplotlib')) {
         await pyodide.runPythonAsync("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; plt.show = lambda *args, **kwargs: None");
       }

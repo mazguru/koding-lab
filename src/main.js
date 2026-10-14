@@ -7,6 +7,7 @@ import cssWorker from '../node_modules/monaco-editor/esm/vs/language/css/css.wor
 import htmlWorker from '../node_modules/monaco-editor/esm/vs/language/html/html.worker.js?worker';
 import tsWorker from '../node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js?worker';
 import { loadPyodide } from 'pyodide';
+import { loadPythonPackages } from './python-packages.js';
 
 self.MonacoEnvironment = {
   getWorker: function (_workerId, label) {
@@ -57,6 +58,8 @@ let teacherDataLoaded = false;
 let teacherFetchInFlight = false;
 let teacherDataHadError = false;
 let accountRecords = [];
+let shareableStudents = [];
+let selectedShareStudentIds = new Set();
 let currentTheme = localStorage.getItem('py_theme') || 'dark';
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -69,6 +72,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyTheme(currentTheme);
   refreshIcons();
   setupAccountManagement();
+  setupFileSharing();
   setupPythonInput();
 
   // 1. Inisialisasi Monaco Editor lebih dulu agar elemen siap
@@ -300,6 +304,7 @@ function applyUserSession() {
   const roleBadge = document.getElementById('roleBadge');
   const antiCopyBadge = document.getElementById('antiCopyBadge');
   const teacherNavTabs = document.getElementById('teacherNavTabs');
+  document.getElementById('shareFileButton').classList.toggle('hidden', currentUser.role !== 'guru');
 
   if (currentUser.role === 'siswa') {
     roleBadge.textContent = 'Siswa';
@@ -359,6 +364,11 @@ function setupAccountManagement() {
   document.getElementById('resetAccountPasswordForm').addEventListener('submit', resetAccountPassword);
   document.getElementById('accountSearchInput').addEventListener('input', renderAccountList);
   updateNewAccountFields();
+}
+
+function setupFileSharing() {
+  document.getElementById('shareFileForm').addEventListener('submit', shareActiveFile);
+  document.getElementById('shareStudentsSearch').addEventListener('input', renderShareStudents);
 }
 
 function updateNewAccountFields() {
@@ -562,10 +572,12 @@ window.handleLogout = async function() {
 };
 
 function getLanguage(filename) {
-  if (filename.endsWith('.html') || filename.endsWith('.htm')) return 'html';
-  if (filename.endsWith('.js')) return 'javascript';
-  if (filename.endsWith('.css')) return 'css';
-  if (filename.endsWith('.json')) return 'json';
+  const normalizedFilename = filename.toLowerCase();
+  if (normalizedFilename.endsWith('.html') || normalizedFilename.endsWith('.htm')) return 'html';
+  if (normalizedFilename.endsWith('.js')) return 'javascript';
+  if (normalizedFilename.endsWith('.css')) return 'css';
+  if (normalizedFilename.endsWith('.json')) return 'json';
+  if (normalizedFilename.endsWith('.txt')) return 'plaintext';
   return 'python';
 }
 
@@ -669,13 +681,23 @@ function renderFileList() {
 }
 
 window.createNewFile = async function() {
-  const name = prompt("Nama file baru (Contoh: index.html, script.js, main.py, style.css):", "latihan.py");
+  const name = prompt("Nama file baru (Contoh: main.py, index.html, data.json, catatan.txt):", "latihan.py");
   if (!name) return;
   
   let formattedName = name.trim();
   if (!formattedName.includes('.')) formattedName += '.py';
+  if (formattedName.toLowerCase() === 'status.json') {
+    alert('Nama status.json dipakai oleh sistem dan tidak dapat digunakan sebagai file workspace.');
+    return;
+  }
 
-  files[formattedName] = getLanguage(formattedName) === 'html' ? "<!-- Tulis kode HTML -->\n<h1>Halo World</h1>" : "# Kode Baru\n";
+  const language = getLanguage(formattedName);
+  const templates = {
+    html: "<!-- Tulis kode HTML -->\n<h1>Halo World</h1>",
+    json: "{\n  \n}\n",
+    python: "# Kode Baru\n"
+  };
+  files[formattedName] = templates[language] || '';
   activeFileName = formattedName;
   updateActiveFileInfo();
   if (editor) {
@@ -685,6 +707,131 @@ window.createNewFile = async function() {
   renderFileList();
   debounceSave();
 };
+
+window.openShareFileModal = async function() {
+  if (currentUser?.role !== 'guru') return;
+  document.getElementById('shareFileName').textContent = activeFileName;
+  document.getElementById('shareStudentsSearch').value = '';
+  document.getElementById('shareStudentsMessage').textContent = 'Memuat daftar siswa...';
+  document.getElementById('shareStudentsList').replaceChildren();
+  document.getElementById('shareFileModal').classList.remove('hidden');
+  document.getElementById('shareFileModal').classList.add('flex');
+  selectedShareStudentIds = new Set();
+
+  try {
+    const response = await apiFetch('/api.php?action=get_accounts');
+    const data = await response.json();
+    if (!response.ok || !data.success || !Array.isArray(data.accounts)) {
+      throw new Error(data.message || 'Gagal memuat daftar siswa.');
+    }
+    shareableStudents = data.accounts.filter((account) => account.role === 'siswa');
+    renderShareStudents();
+  } catch (error) {
+    console.error('Gagal memuat daftar siswa untuk berbagi file:', error);
+    document.getElementById('shareStudentsMessage').textContent =
+      error.message || 'Gagal memuat daftar siswa.';
+  }
+};
+
+window.closeShareFileModal = function() {
+  document.getElementById('shareFileModal').classList.add('hidden');
+  document.getElementById('shareFileModal').classList.remove('flex');
+};
+
+function renderShareStudents() {
+  const container = document.getElementById('shareStudentsList');
+  const message = document.getElementById('shareStudentsMessage');
+  const query = document.getElementById('shareStudentsSearch').value.trim().toLowerCase();
+  const students = shareableStudents.filter((student) =>
+    `${student.name} ${student.identifier} ${student.class}`.toLowerCase().includes(query)
+  );
+  container.replaceChildren();
+  message.textContent = shareableStudents.length === 0
+    ? 'Belum ada akun siswa.'
+    : students.length === 0 ? 'Siswa yang cocok tidak ditemukan.' : '';
+
+  students.forEach((student) => {
+    const label = document.createElement('label');
+    label.className = 'flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm dark:border-slate-800 dark:bg-slate-950';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = student.identifier;
+    checkbox.checked = selectedShareStudentIds.has(student.identifier);
+    checkbox.className = 'h-4 w-4 accent-blue-600';
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedShareStudentIds.add(student.identifier);
+      else selectedShareStudentIds.delete(student.identifier);
+      document.getElementById('shareSelectedCount').textContent =
+        `${selectedShareStudentIds.size} siswa dipilih`;
+    });
+    const details = document.createElement('span');
+    details.className = 'min-w-0 flex-1';
+    const name = document.createElement('span');
+    name.className = 'block truncate font-medium text-slate-900 dark:text-white';
+    name.textContent = student.name || '(Nama belum diatur)';
+    const meta = document.createElement('span');
+    meta.className = 'block truncate text-xs text-slate-500 dark:text-slate-400';
+    meta.textContent = `NIPD ${student.identifier}${student.class ? ` · ${student.class}` : ''}`;
+    details.append(name, meta);
+    label.append(checkbox, details);
+    container.appendChild(label);
+  });
+  document.getElementById('shareSelectedCount').textContent =
+    `${selectedShareStudentIds.size} siswa dipilih`;
+}
+
+async function shareActiveFile(event) {
+  event.preventDefault();
+  if (selectedShareStudentIds.size === 0) {
+    document.getElementById('shareStudentsMessage').textContent = 'Pilih minimal satu siswa.';
+    return;
+  }
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('button[type="submit"]');
+  setButtonLoading(submitButton, true, 'Membagikan...');
+  try {
+    const saveResponse = await apiFetch('/api.php?action=save_file', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename: activeFileName, content: editor.getValue() })
+    });
+    const saveData = await saveResponse.json();
+    if (!saveResponse.ok || !saveData.success) {
+      throw new Error(saveData.message || 'Gagal menyimpan file sebelum dibagikan.');
+    }
+
+    const response = await apiFetch('/api.php?action=share_file', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        filename: activeFileName,
+        recipients: [...selectedShareStudentIds]
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      const completed = Array.isArray(data.shared) ? data.shared.length : 0;
+      const failedStudents = Array.isArray(data.failed)
+        ? data.failed.map((student) => student.name || student.nipd).join(', ')
+        : '';
+      throw new Error(
+        completed
+          ? `${data.message || 'Sebagian file gagal dibagikan.'} Berhasil: ${completed} siswa.${failedStudents ? ` Gagal: ${failedStudents}.` : ''}`
+          : data.message || 'Gagal membagikan file.'
+      );
+    }
+    const summary = data.shared.map((student) => `${student.name}: ${student.filename}`).join('\n');
+    closeShareFileModal();
+    alert(`File ${activeFileName} berhasil dibagikan sebagai salinan:\n${summary}`);
+    await loadUserFilesFromServer();
+  } catch (error) {
+    console.error('Gagal membagikan file:', error);
+    document.getElementById('shareStudentsMessage').textContent =
+      error.message || 'Terjadi kesalahan saat membagikan file.';
+  } finally {
+    setButtonLoading(submitButton, false);
+  }
+}
 
 window.selectFile = async function(fileName) {
   activeFileName = fileName;
@@ -922,7 +1069,7 @@ function runPythonCode(code, paneId) {
 
 async function runPythonCodeOnMainThread(code) {
   appendConsole('[Memuat paket Python yang diperlukan...]', pythonOutputPaneId);
-  await pyodideInstance.loadPackagesFromImports(code);
+  await loadPythonPackages(pyodideInstance, code, PYODIDE_PACKAGE_BASE_URL);
   if (code.includes('matplotlib')) {
     await pyodideInstance.runPythonAsync("import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; plt.show = lambda *args, **kwargs: None");
   }

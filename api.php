@@ -40,7 +40,8 @@ function requireLogin($role = null) {
 
 function allowedFilename($filename) {
     return is_string($filename)
-        && preg_match('/\A[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,98}\.(py|html|js|css)\z/i', $filename) === 1;
+        && strcasecmp($filename, 'status.json') !== 0
+        && preg_match('/\A[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,98}\.(py|html|js|css|json|txt)\z/i', $filename) === 1;
 }
 
 function sanitize($value) {
@@ -438,7 +439,7 @@ if ($action === 'get_files') {
 
     if (file_exists($folder)) {
         $scanned = scandir($folder);
-        $allowedExts = ['py', 'html', 'js', 'css'];
+        $allowedExts = ['py', 'html', 'js', 'css', 'json', 'txt'];
 
         foreach ($scanned as $f) {
             $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
@@ -447,9 +448,11 @@ if ($action === 'get_files') {
             }
         }
 
+        $activeFile = isset($files['main.py']) ? 'main.py' : (array_key_first($files) ?? 'main.py');
         if (file_exists($folder . '/status.json')) {
             $status = json_decode(file_get_contents($folder . '/status.json'), true);
-            if (isset($status['active_file']) && $status['active_file'] !== 'index.php') {
+            if (is_array($status) && is_string($status['active_file'] ?? null)
+                && isset($files[$status['active_file']])) {
                 $activeFile = $status['active_file'];
             }
         }
@@ -479,6 +482,93 @@ if ($action === 'save_file') {
     }
     
     respond(['success' => true]);
+}
+
+if ($action === 'share_file') {
+    $teacher = requireLogin('guru');
+    $input = requestData();
+    $filename = $input['filename'] ?? '';
+    $recipients = $input['recipients'] ?? null;
+    if (!allowedFilename($filename) || !is_array($recipients) || count($recipients) < 1 || count($recipients) > 100) {
+        respond(['success' => false, 'message' => 'File atau daftar siswa tidak valid. Pilih 1 sampai 100 siswa.'], 400);
+    }
+
+    $uniqueRecipients = [];
+    foreach ($recipients as $recipient) {
+        if (!is_string($recipient) || preg_match('/\A[a-zA-Z0-9_-]{1,64}\z/', $recipient) !== 1) {
+            respond(['success' => false, 'message' => 'NIPD siswa tidak valid.'], 400);
+        }
+        $uniqueRecipients[$recipient] = true;
+    }
+
+    $usersData = json_decode(file_get_contents($usersFile), true);
+    if (!is_array($usersData) || !isset($usersData['siswa']) || !is_array($usersData['siswa'])) {
+        respond(['success' => false, 'message' => 'Data akun siswa tidak valid.'], 500);
+    }
+
+    $studentsById = [];
+    foreach ($usersData['siswa'] as $student) {
+        $studentId = (string)($student['nipd'] ?? '');
+        if (isset($uniqueRecipients[$studentId])) {
+            $studentsById[$studentId] = $student;
+        }
+    }
+    if (count($studentsById) !== count($uniqueRecipients)) {
+        respond(['success' => false, 'message' => 'Satu atau lebih siswa yang dipilih tidak ditemukan. Muat ulang daftar siswa.'], 404);
+    }
+
+    $teacherFolder = getUserFolder('guru', $teacher['id'], $dataDir, $usersFile);
+    $sourcePath = $teacherFolder . '/' . $filename;
+    if (!is_file($sourcePath)) {
+        respond(['success' => false, 'message' => 'File guru tidak ditemukan. Simpan file lalu coba lagi.'], 404);
+    }
+    $content = file_get_contents($sourcePath);
+    if ($content === false) {
+        respond(['success' => false, 'message' => 'Gagal membaca file guru.'], 500);
+    }
+    if (strlen($content) > 1048576) {
+        respond(['success' => false, 'message' => 'Ukuran file maksimum adalah 1 MB.'], 413);
+    }
+
+    $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    $sourceName = pathinfo($filename, PATHINFO_FILENAME);
+    $sharedPrefix = 'guru_' . substr(hash('sha256', $teacher['id']), 0, 8) . '_';
+    $results = [];
+    $failures = [];
+    foreach ($studentsById as $studentId => $student) {
+        $studentFolder = getUserFolder('siswa', $studentId, $dataDir, $usersFile);
+        $suffix = '.' . $extension;
+        $availableNameLength = 99 - strlen($sharedPrefix) - strlen($suffix);
+        $baseName = substr($sourceName, 0, $availableNameLength);
+        $sharedFilename = $sharedPrefix . $baseName . $suffix;
+        $version = 2;
+        while (file_exists($studentFolder . '/' . $sharedFilename)) {
+            $versionSuffix = '_' . $version++;
+            $sharedFilename = $sharedPrefix
+                . substr($sourceName, 0, $availableNameLength - strlen($versionSuffix))
+                . $versionSuffix . $suffix;
+        }
+
+        if (file_put_contents($studentFolder . '/' . $sharedFilename, $content, LOCK_EX) === false) {
+            $failures[] = ['name' => (string)($student['nama'] ?? ''), 'nipd' => $studentId];
+            continue;
+        }
+        $results[] = [
+            'name' => (string)($student['nama'] ?? ''),
+            'nipd' => $studentId,
+            'filename' => $sharedFilename
+        ];
+    }
+
+    if (count($failures) > 0) {
+        respond([
+            'success' => false,
+            'message' => 'Sebagian file gagal dibagikan. Periksa izin folder data siswa.',
+            'shared' => $results,
+            'failed' => $failures
+        ], 500);
+    }
+    respond(['success' => true, 'shared' => $results]);
 }
 
 if ($action === 'delete_file') {
@@ -541,7 +631,7 @@ if ($action === 'get_all_students_data') {
             }
 
             $scanned = scandir($studentFolder);
-            $allowedExts = ['py', 'html', 'js', 'css'];
+            $allowedExts = ['py', 'html', 'js', 'css', 'json', 'txt'];
 
             foreach ($scanned as $f) {
                 $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
@@ -550,10 +640,10 @@ if ($action === 'get_all_students_data') {
                 }
             }
 
-            if (file_exists($studentFolder . '/' . $activeFile)) {
-                $code = file_get_contents($studentFolder . '/' . $activeFile);
-            } elseif (!empty($fileList)) {
-                $activeFile = $fileList[0];
+            if (!in_array($activeFile, $fileList, true)) {
+                $activeFile = $fileList[0] ?? 'main.py';
+            }
+            if (in_array($activeFile, $fileList, true)) {
                 $code = file_get_contents($studentFolder . '/' . $activeFile);
             }
         }

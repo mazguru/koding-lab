@@ -8,12 +8,22 @@ const pyodideRoot = resolve(projectRoot, 'node_modules', 'pyodide');
 const packageDirectory = resolve(projectRoot, 'src', 'public', 'pyodide', 'packages');
 const packagesBaseUrl = 'https://cdn.jsdelivr.net/pyodide';
 const downloadConcurrency = 8;
+const additionalPackages = [
+  {
+    file_name: 'seaborn-0.13.2-py3-none-any.whl',
+    sha256: '636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987',
+    url: 'https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl'
+  }
+];
 
 const lockfile = JSON.parse(await readFile(resolve(pyodideRoot, 'pyodide-lock.json'), 'utf8'));
 const pyodideVersion = JSON.parse(await readFile(resolve(pyodideRoot, 'package.json'), 'utf8')).version;
-const packages = Object.values(lockfile.packages).filter((packageInfo) =>
-  packageInfo.package_type === 'package' || packageInfo.package_type === 'shared_library'
-);
+const packages = [
+  ...Object.values(lockfile.packages).filter((packageInfo) =>
+    packageInfo.package_type === 'package' || packageInfo.package_type === 'shared_library'
+  ),
+  ...additionalPackages
+];
 await mkdir(packageDirectory, { recursive: true });
 const previousFiles = (await readdir(packageDirectory)).filter((name) => /^[\w.+-]+\.(?:whl|zip)$/.test(name));
 
@@ -46,7 +56,8 @@ async function downloadPackage(packageInfo) {
     if (error.code !== 'ENOENT') throw error;
   }
 
-  const packageUrl = `${packagesBaseUrl}/v${pyodideVersion}/full/${packageInfo.file_name}`;
+  const packageUrl = packageInfo.url ||
+    `${packagesBaseUrl}/v${pyodideVersion}/full/${packageInfo.file_name}`;
   const response = await fetch(packageUrl);
   if (!response.ok) {
     throw new Error(`Gagal mengunduh ${packageInfo.file_name}: HTTP ${response.status} dari ${packageUrl}`);
